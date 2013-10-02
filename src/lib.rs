@@ -1,0 +1,75 @@
+#[link(name = "rustyzip",
+       vers = "0.1",
+       uuid = "f5bd100e-dbda-4e45-a461-493bd6da5b38")];
+#[crate_type = "lib"];
+
+
+/******************************************************************************
+ * RustyZip, compression library in Rust.
+ */
+
+
+/******************************************************************************
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0.  If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/.
+ * 
+ * Software distributed under the License is distributed on an "AS IS" basis, 
+ * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for 
+ * the specific language governing rights and limitations under the License.
+ *
+ * The Original Code is: RustyZip
+ * The Initial Developer of the Original Code is: William Wong (williamw520@gmail.com)
+ * Portions created by William Wong are Copyright (C) 2013 William Wong, All Rights Reserved.
+ *
+ ******************************************************************************/
+
+
+extern mod extra;
+
+// use std::result::Result;
+// use std::str;
+// use std::to_str::ToStr;
+// use std::vec;
+
+//use common::strutil;
+//use common::netutil;
+//use common::ioutil;
+
+
+
+// Configure the modules in this crate
+pub mod rustyzip_lib {      // make mod pub so that its pub names can be linked by the linker.
+    pub mod deflate;
+    pub mod gzip;
+}
+pub mod common {
+    pub mod bitstream;
+    pub mod apputil;
+    pub mod strutil;
+    pub mod ioutil;
+//    pub mod netutil;
+}
+
+
+
+// Public interface for the library. 
+
+
+/// Constants
+
+
+
+/// main1
+pub fn main1() -> RustyZip  {
+    return RustyZip { 
+            dummy: 0 
+    };
+}
+
+
+pub struct RustyZip {
+    dummy:  uint
+}
+
+
