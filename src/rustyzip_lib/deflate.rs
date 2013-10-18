@@ -78,8 +78,12 @@ impl Inflate_Status {
 pub static MAX_COMPRESS_LEVEL : uint = 10;
 static TDEFL_NUM_PROBES : [c_uint, ..11] = [ 0 as c_uint, 1, 6, 32, 16, 32, 128, 256,  512, 768, 1500 ];
 
-static TDEFL_WRITE_ZLIB_HEADER : c_uint             = 0x01000;  // Outputs a zlib header before the deflate data, and the Adler-32 of the source data at the end.
-static TDEFL_COMPUTE_ADLER32 : c_uint               = 0x02000;  // Always compute the adler-32 of the input data (even when not writing zlib headers).
+/// The minimum output buffer size for decompression.  Max size of the LZ dictionary is 32K at the beginning of an out_buf.
+pub static MIN_DECOMPRESS_BUF_SIZE : uint = 32768;
+
+// Redefine flags here for internal use
+static TDEFL_WRITE_ZLIB_HEADER : c_uint             = 0x01000;
+static TDEFL_COMPUTE_ADLER32 : c_uint               = 0x02000;
 static TDEFL_GREEDY_PARSING_FLAG : c_uint           = 0x04000;
 static TDEFL_NONDETERMINISTIC_PARSING_FLAG : c_uint = 0x08000;
 static TDEFL_RLE_MATCHES : c_uint                   = 0x10000;
@@ -92,18 +96,11 @@ static TDEFL_SYNC_FLUSH : c_int = 2;
 static TDEFL_FULL_FLUSH : c_int = 3;
 static TDEFL_FINISH : c_int     = 4;
 
-
-// TINFL_FLAG_PARSE_ZLIB_HEADER: If set, the input has a valid zlib header and ends with an adler32 checksum (it's a valid zlib stream). Otherwise, the input is a raw deflate stream.
-// TINFL_FLAG_HAS_MORE_INPUT: If set, there are more input bytes available beyond the end of the supplied input buffer. If clear, the input buffer contains all remaining input.
-// TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF: If set, the output buffer is large enough to hold the entire decompressed stream. If clear, the output buffer is at least the size of the dictionary (typically 32KB).
-// TINFL_FLAG_COMPUTE_ADLER32: Force adler-32 checksum computation of the decompressed bytes.
 static TINFL_FLAG_PARSE_ZLIB_HEADER : c_uint                = 1;
 static TINFL_FLAG_HAS_MORE_INPUT : c_uint                   = 2;
 static TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF : c_uint    = 4;
 static TINFL_FLAG_COMPUTE_ADLER32 : c_uint                  = 8;
 
-/// The minimum output buffer size for decompression.  Max size of the LZ dictionary is 32K at the beginning of an out_buf.
-pub static MIN_DECOMPRESS_BUF_SIZE : uint = 32768;
 
 
 mod rustrt {

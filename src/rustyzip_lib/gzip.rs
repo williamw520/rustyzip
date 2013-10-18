@@ -33,11 +33,11 @@ static MAGIC2: u8 = 0x8b;
 static COMPRESSION_DEFLATE: u8 = 8;
 
 // Header flags
-static FTEXT: u8    = 1;	// File is text file
-static FHCRC: u8    = 2;	// Header CRC
-static FEXTRA: u8   = 4;	// Extra field
-static FNAME: u8    = 8;	// File name
-static FCOMMENT: u8 = 16;	// File comment
+static FTEXT: u8    = 1;    // File is text file
+static FHCRC: u8    = 2;    // Header CRC
+static FEXTRA: u8   = 4;    // Extra field
+static FNAME: u8    = 8;    // File name
+static FCOMMENT: u8 = 16;   // File comment
 
 
 
@@ -107,16 +107,16 @@ impl GZip {
 
     fn readExtraHeader<R: Reader>(&mut self, reader: &mut BitReader<R>) -> Result<uint, ~str> {
 
-	    if (self.flags & FEXTRA) == FEXTRA {
+        if (self.flags & FEXTRA) == FEXTRA {
             self.xfield_len = Some(reader.read_u16_le());
             self.xfield = Some(reader.read_upto(self.xfield_len.unwrap() as uint));
         }
 
-	    if (self.flags & FNAME) == FNAME {
+        if (self.flags & FNAME) == FNAME {
             self.filename = Some(reader.read_strz());
         }
 
-	    if (self.flags & FCOMMENT) == FCOMMENT {
+        if (self.flags & FCOMMENT) == FCOMMENT {
             self.comment = Some(reader.read_strz());
         }
 
@@ -142,11 +142,11 @@ impl GZip {
             // upcall function to read input data for decompression
             |in_buf| {
                 if reader.eof() {
-                    0
+                    0                           // EOF
                 } else {
                     match reader.read(in_buf) {
-                        Some(nread) => nread,   // EOF if it's 0
-                            None => 0               // EOF
+                        Some(nread) => nread,   // read number of bytes read, including 0 for EOF
+                        None => 0               // EOF
                     }
                 }
             },
