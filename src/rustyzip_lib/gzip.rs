@@ -21,7 +21,8 @@ use common::ioutil::ReaderEx;
 
 use common::ioutil;
 use common::bitstream::BitReader;
-use super::deflate::Inflater;
+use super::deflate::INFLATE_STATUS_DONE;
+use super::deflate::Decompressor;
 
 
 
@@ -42,8 +43,8 @@ static FCOMMENT: u8 = 16;	// File comment
 
 /// GZip to decompress a data stream
 pub struct GZip {
-    magic1:         u8,
-    magic2:         u8,
+    id1:            u8,
+    id2:            u8,
     compression:    u8,
     flags:          u8,
     mtime:          u32,
@@ -62,8 +63,8 @@ impl GZip {
 
     pub fn new() -> GZip {
         GZip {
-            magic1:         0,
-            magic2:         0,
+            id1:            0,
+            id2:            0,
             compression:    0,
             flags:          0,
             mtime:          0,
@@ -79,27 +80,32 @@ impl GZip {
         }
     }
 
-    fn readHeader<R: Reader>(&mut self, reader: &mut BitReader<R>) -> Result<uint, ~str> {
+    fn readFixedHeader<R: Reader>(&mut self, reader: &mut BitReader<R>) -> Result<uint, ~str> {
 
         let mut buf = [0, ..HEADER_FIXED_LEN];
         if reader.read_buf_upto(buf, 0, HEADER_FIXED_LEN) != HEADER_FIXED_LEN {
             return Err(~"Too few data to be a valid gzip format.");
         }
 
-        self.magic1 = buf[0];
-        self.magic2 = buf[1];
+        self.id1 = buf[0];
+        self.id2 = buf[1];
         self.compression = buf[2];
         self.flags = buf[3];
         self.mtime = ioutil::unpack_u32_le(buf, 4);
         self.xflags = buf[8];
         self.os = buf[9];
 
-        if self.magic1 != MAGIC1 || self.magic2 != MAGIC2 {
-            return Err(~"Invalid signature");
+        if self.id1 != MAGIC1 || self.id2 != MAGIC2 {
+            return Err(~"Invalid gzip signature");
         }
         if self.compression != COMPRESSION_DEFLATE {
             return Err(~"Unsupported compression method");
         }
+
+        Ok(0)
+    }
+
+    fn readExtraHeader<R: Reader>(&mut self, reader: &mut BitReader<R>) -> Result<uint, ~str> {
 
 	    if (self.flags & FEXTRA) == FEXTRA {
             self.xfield_len = Some(reader.read_u16_le());
@@ -114,27 +120,74 @@ impl GZip {
             self.comment = Some(reader.read_strz());
         }
 
-        debug!(fmt!("data: %?", self));
-
-        //let buf2 = reader.read_to_end();
-        //debug!(fmt!("buf2: %?", buf2));
-
+        if (self.flags & FHCRC) == FHCRC {
+            self.header_crc = Some(reader.read_u16_le());
+        }
 
         Ok(0)
     }
 
+    fn readFooter<R: Reader>(&mut self, reader: &mut BitReader<R>) -> Result<uint, ~str> {
+        //self.crc32 = reader.read_u32_le();
+        //self.original_size = reader.read_u32_le();
+        Ok(0)
+    }
+
+    fn readCompressedData<R: Reader>(&mut self, reader: &mut BitReader<R>) -> Result<uint, ~str> {
+        let mut decomp_data : ~[u8] = ~[];
+        let mut remaining_data : ~[u8] = ~[];
+
+        let mut decomp = Decompressor::new();
+        let status = decomp.decompress_upcalls(
+            // upcall function to read input data for decompression
+            |in_buf| {
+                if reader.eof() {
+                    0
+                } else {
+                    match reader.read(in_buf) {
+                        Some(nread) => nread,   // EOF if it's 0
+                            None => 0               // EOF
+                    }
+                }
+            },
+            // upcall function to write the decompressed data
+            |out_buf, _ /* is_eof */| {
+                decomp_data.push_all(out_buf);
+                false                           // don't abort
+            },
+            // upcall function to handle the remaining input data that are not part of the compressed data.
+            |rest_buf| {
+                remaining_data.push_all(rest_buf);
+            } );
+        decomp.free();
+
+        println(fmt!("decomp_data: %?", decomp_data));
+        println(fmt!("remaining_data: %?", remaining_data));
+
+        match status {
+            INFLATE_STATUS_DONE => Ok(0),
+            _ => Err(fmt!("Failed to decompress data.  Status: %?", status))
+        }
+    }
 
     /// Decompress the data stream
     pub fn decompress<R: Reader>(&mut self, reader: &mut BitReader<R>) -> Result<uint, ~str> {
-
-        match self.readHeader(reader) {
-            Ok(_)   => {
-                let mut inflater = Inflater::new();
-                return inflater.inflate(reader);
+        match self.readFixedHeader(reader) {
+            Ok(_) => {
+                match self.readExtraHeader(reader) {
+                    Ok(_) => {
+                        match self.readCompressedData(reader) {
+                            Ok(_) => {
+                                self.readFooter(reader)
+                            },
+                            Err(s) => Err(s)
+                        }
+                    },
+                    Err(s) => Err(s)
+                }
             },
-            Err(s)  => Err(s)
+            Err(s) => Err(s)
         }
-
     }
 
 }

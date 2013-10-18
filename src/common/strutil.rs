@@ -53,16 +53,34 @@ pub fn clean_split<Sep: CharEq>(s : &str, seperator: Sep) -> ~[&str] {
 
 #[test]
 fn test_to_num() {
-    println( fmt!("%?", from_str::<int>("28")) );
-    println( fmt!("%?", to_num("9000", 1234)) );
-    println( fmt!("%?", to_num("123", 1234)) );
-    println( fmt!("%?", to_num("abc", 1234)) );
+    //println( fmt!("%?", from_str::<int>("28")) );
+    if from_str::<int>("28").unwrap() != 28 { fail!() };
+
+    //println( fmt!("%?", to_num("9000", 1234)) );
+    if to_num("9000", 1234) != 9000 { fail!() };
+
+    //println( fmt!("%?", to_num("123", 1234)) );
+    if to_num("123", 1234) != 123 { fail!() };
+
+    //println( fmt!("%?", to_num("abc", 1234)) );
+    if to_num("abc", 1234) != 1234 { fail!() };
 }
 
 #[test]
 fn test_clean_split() {
-    println( fmt!("%?", clean_split("a.b.c", '.')) );
-    println( fmt!("%?", clean_split("a.123.c", '.')) );
-    println( fmt!("%?", clean_split(" a :123.c ", ':')) );
+    //println( fmt!("%?", clean_split("a.b.c", '.')) );
+    if clean_split("a.b.c", '.')[0] != "a" { fail!() };
+    if clean_split("a.b.c", '.')[1] != "b" { fail!() };
+    if clean_split("a.b.c", '.')[2] != "c" { fail!() };
+
+    //println( fmt!("%?", clean_split("a.123.c", '.')) );
+    if clean_split("a.123.c", '.')[0] != "a" { fail!() };
+    if clean_split("a.123.c", '.')[1] != "123" { fail!() };
+    if clean_split("a.123.c", '.')[2] != "c" { fail!() };
+
+    //println( fmt!("%?", clean_split(" a :123.c ", ':')) );
+    if clean_split(" a :123.c ", ':')[0] != "a" { fail!() };
+    if clean_split(" a :123.c ", ':')[1] != "123.c" { fail!() };
+
 }
 

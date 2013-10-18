@@ -47,9 +47,9 @@ scratch: $(TEST_DIR)/scratch.rs
 	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS)  $(TEST_DIR)/scratch.rs
 	@$(BUILD_DIR)/scratch
 
-test-rustyzip:
-	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS) --test $(SRC_DIR)/rustyzip.rs
-	@$(BUILD_DIR)/rustyzip
+test-lib:
+	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS) --test $(SRC_DIR)/lib.rs
+	@$(BUILD_DIR)/lib
 
 test-bitstream:
 	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS) --test $(SRC_DIR)/common/bitstream.rs

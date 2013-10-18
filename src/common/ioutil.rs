@@ -275,38 +275,38 @@ impl<R: Reader> ReaderEx for R {
 
 #[test]
 fn test() {
-    //println( fmt!("%?", clean_split("a.b.c", '.')) );
-    let mut buf = vec::from_elem(32, 0u8);
+    let mut buf = vec::from_elem(16, 0u8);
     let mut offset;
 
-    offset = pack_u8_be(buf, 0, 1);
-    offset = pack_u8_be(buf, offset, 2);
-    println( fmt!("%? %?", buf, offset) );
+    offset = pack_u8(buf, 0, 1);
+    offset = pack_u8(buf, offset, 2);
+    //println( fmt!("%? %?", buf, offset) );
+    if offset != 2 { fail!() };
+    if buf[0] != 1 { fail!() };
+    if buf[1] != 2 { fail!() };
 
     offset = pack_u16_be(buf, 0, 0x0102);
-    println( fmt!("%? %?", buf, offset) );
+    //println( fmt!("%? %?", buf, offset) );
+    if offset != 2 { fail!() };
+    if buf[0] != 1 { fail!() };
+    if buf[1] != 2 { fail!() };
 
-    offset = pack_str(buf, offset, "ABCD");
-    println( fmt!("%? %?", buf, offset) );
+    offset = pack_str(buf, 0, "ABCD");
+    //println( fmt!("%? %?", buf, offset) );
+    if offset != 4 { fail!() };
+    if buf[0] != 'A' as u8 { fail!() };
+    if buf[1] != 'B' as u8 { fail!() };
+    if buf[2] != 'C' as u8 { fail!() };
+    if buf[3] != 'D' as u8 { fail!() };
 
-    offset = pack_u16_be(buf, 0, 12345);
-    println( fmt!("%? %?", buf, offset) );
-    println( fmt!("%? %?", unpack_u16_be(buf, 0), offset) );
+    pack_u16_be(buf, 0, 12345);
+    if unpack_u16_be(buf, 0) != 12345 { fail!() };
 
-    offset = pack_u32_be(buf, 0, 12345678);
-    println( fmt!("%? %?", buf, offset) );
-    println( fmt!("%? %?", unpack_u32_be(buf, 0), offset) );
+    pack_u32_be(buf, 0, 12345678);
+    if unpack_u32_be(buf, 0) != 12345678 { fail!() };
 
-    offset = pack_u64_be(buf, 0, 12345678901234);
-    println( fmt!("%? %?", buf, offset) );
-    println( fmt!("%? %?", unpack_u64_be(buf, 0), offset) );
-
-    pack_u64_be(buf, 0, 0);
-    println( fmt!("%? %?", fold_bytes(buf), buf) );
-    pack_u64_be(buf, 0, 1);
-    println( fmt!("%? %?", fold_bytes(buf), buf) );
-    pack_u64_be(buf, 0, 0x0000000100000002);
-    println( fmt!("%? %?", fold_bytes(buf), buf) );
+    pack_u64_be(buf, 0, 12345678901234);
+    if unpack_u64_be(buf, 0) != 12345678901234 { fail!() };
 
 }
 
