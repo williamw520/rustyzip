@@ -109,7 +109,7 @@ mod rustrt {
     #[link_name = "rustrt"]
     extern {
         // The DEFLATE algorithm is handled by the Miniz package in C/C++ land.
-        // Define the API needed to miniz.cpp.
+        // Define the API into miniz.cpp.
         pub fn tdefl_alloc_compressor() -> *c_void;
         pub fn tdefl_free_compressor(pCompressor: *c_void);
         pub fn tdefl_init(tdefl_compressor: *c_void, 
@@ -262,7 +262,7 @@ impl Compressor {
                     write_fn(out_buf.slice(0, out_offset), true);
                     return status;
                 },
-                _ => return status
+                _ => return status  // Return error
             }
         }
     }
@@ -414,15 +414,12 @@ impl Decompressor {
 
             let mut in_bytes = in_buf_total - in_offset;
             let mut out_bytes = out_buf_total - out_offset;
-            println(fmt!("up: in_offset %?", in_offset));
-            println(fmt!("up: in_bytes %?", in_bytes));
-            println(fmt!("up: in_buf_total %?", in_buf_total));
             let status = self.decompress_buf(in_buf, in_offset, &mut in_bytes, in_buf_total == 0, out_buf, out_offset, &mut out_bytes, false);
             in_offset += in_bytes;
             out_offset += out_bytes;
-            println(fmt!("up2: in_offset %?", in_offset));
-            println(fmt!("up2: in_bytes %?", in_bytes));
-            println(fmt!("up2: in_buf_total %?", in_buf_total));
+            // println(fmt!("up2: in_offset %?", in_offset));
+            // println(fmt!("up2: in_bytes %?", in_bytes));
+            // println(fmt!("up2: in_buf_total %?", in_buf_total));
 
             match status {
                 INFLATE_STATUS_NEEDS_MORE_INPUT | INFLATE_STATUS_HAS_MORE_OUTPUT => {
@@ -438,7 +435,7 @@ impl Decompressor {
                     rest_fn(in_buf.slice(in_offset, in_buf_total));
                     return status;
                 },
-                _ => return status
+                _ => return status  // return error
             }
         }
     }
