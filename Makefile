@@ -43,10 +43,6 @@ clean:
 	rm -f *~
 
 
-scratch: $(TEST_DIR)/scratch.rs
-	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS)  $(TEST_DIR)/scratch.rs
-	@$(BUILD_DIR)/scratch
-
 test-lib:
 	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS) --test $(SRC_DIR)/lib.rs
 	@$(BUILD_DIR)/lib
@@ -58,8 +54,4 @@ test-bitstream:
 test-strutil:
 	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS) --test $(SRC_DIR)/common/strutil.rs
 	@$(BUILD_DIR)/strutil
-
-bench:
-	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS) --test $(SRC_DIR)/test/bench.rs
-	@$(BUILD_DIR)/bench --bench
 

@@ -385,7 +385,7 @@ fn decompress_file(options: &Options, file: &str) -> Result<uint, ~str> {
     result
 }
 
-fn list_file(options: &Options, file: &str) -> Result<~str, ~str> {
+fn list_file(file: &str) -> Result<~str, ~str> {
 
     let filepath = Path(file);
 
@@ -471,7 +471,7 @@ fn main()  {
                 LIST => {
                     println("compressed uncompress  ratio uncompressed_name");
                     for file in options.files.iter() {
-                        print_result(list_file(&options, *file));
+                        print_result(list_file(*file));
                     }
                 }
             }

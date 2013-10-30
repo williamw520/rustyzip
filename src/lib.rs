@@ -27,15 +27,6 @@
 
 extern mod extra;
 
-// use std::result::Result;
-// use std::str;
-// use std::to_str::ToStr;
-// use std::vec;
-
-//use common::strutil;
-//use common::netutil;
-//use common::ioutil;
-
 
 
 // Configure the modules in this crate
@@ -46,26 +37,4 @@ pub mod rustyzip_lib {      // make mod pub so that its pub names can be linked 
 pub mod common {
     pub mod ioutil;
 }
-
-
-
-// Public interface for the library. 
-
-
-/// Constants
-
-
-
-/// main1
-pub fn main1() -> RustyZip  {
-    return RustyZip { 
-            dummy: 0 
-    };
-}
-
-
-pub struct RustyZip {
-    dummy:  uint
-}
-
 
