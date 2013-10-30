@@ -1853,23 +1853,23 @@ size_t tdefl_compress_mem_to_mem(void *pOut_buf, size_t out_buf_len, const void 
 
 ////////////////////////////////////////////////////////////////////////
 // Begin of changes added for Rust.
-// Allocate the tdefl_compressor and tinfl_decompressor in C++ to simplify
-// the management of the structures.  Rust can treat them as opaque pointers.
 // williamw520@gmail.com
-
-tdefl_compressor* tdefl_alloc_compressor(void)
+// Allocate the tdefl_compressor and tinfl_decompressor structures in C so that
+// non-C language bindings to tdefL_ and tinfl_ API don't need to worry about
+// structure size and allocation mechanism.
+tdefl_compressor* tdefl_compressor_alloc(void)
 {
   tdefl_compressor *pComp;
   pComp = (tdefl_compressor*)MZ_MALLOC(sizeof(tdefl_compressor));
   return pComp;
 }
 
-void tdefl_free_compressor(tdefl_compressor* pComp)
+void tdefl_compressor_free(tdefl_compressor* pComp)
 {
   MZ_FREE(pComp);
 }
 
-tinfl_decompressor* tinfl_alloc_decompressor(void)
+tinfl_decompressor* tinfl_decompressor_alloc(void)
 {
   tinfl_decompressor *pDecomp;
   pDecomp = (tinfl_decompressor*)MZ_MALLOC(sizeof(tinfl_decompressor));
@@ -1880,7 +1880,7 @@ tinfl_decompressor* tinfl_alloc_decompressor(void)
   return pDecomp;
 }
 
-void tinfl_free_decompressor(tinfl_decompressor* pDecomp)
+void tinfl_decompressor_free(tinfl_decompressor* pDecomp)
 {
   MZ_FREE(pDecomp);
 }

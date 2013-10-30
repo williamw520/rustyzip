@@ -7,7 +7,7 @@
  * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for 
  * the specific language governing rights and limitations under the License.
  *
- * The Original Code is: RustyMem
+ * The Original Code is: ioutil.rs
  * The Initial Developer of the Original Code is: William Wong (williamw520@gmail.com)
  * Portions created by William Wong are Copyright (C) 2013 William Wong, All Rights Reserved.
  *
@@ -152,6 +152,15 @@ pub fn pack_str(buf: &mut [u8], offset: uint, str_value: &str) -> uint {
     return copy_bytes(buf, offset, str_bytes, 0, str_bytes.len());
 }
 
+pub fn to_strz(str_value: &str) -> ~[u8] {
+    let str_bytes = str_value.as_bytes();
+    let mut buf = vec::from_elem(str_bytes.len() + 1, 0u8);
+    vec::bytes::copy_memory(buf, str_bytes, str_bytes.len());
+    buf[buf.len() - 1] = 0;
+    return buf;
+}
+
+
 pub fn copy_bytes(to_buf: &mut [u8],  to_offset: uint,  from_buf: &[u8],  from_offset: uint,  len: uint) -> uint {
     let to_slice = to_buf.mut_slice(to_offset, to_offset + len);
     let from_slice = from_buf.slice(from_offset, from_offset + len);
@@ -159,22 +168,6 @@ pub fn copy_bytes(to_buf: &mut [u8],  to_offset: uint,  from_buf: &[u8],  from_o
     to_offset + len
 }
 
-// pub fn fold_bytes(bytes: &[u8]) -> u32 {
-//     let mut val4 = 0u32;
-//     let mut value = 0u32;
-//     for i in range(0, bytes.len()) {
-//         val4 = (val4 << 8) | bytes[i] as u32;
-//         if i % 4 == 3 {
-//             if value == 0 {
-//                 value = val4
-//             } else {
-//                 value = value ^ val4
-//             }
-//         }
-//     }
-    
-//     value
-// }
 
 pub fn trunc_bytes(bytes: &[u8]) -> u32 {
     // Take the first 4 bytes as int

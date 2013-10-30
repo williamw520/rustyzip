@@ -44,11 +44,7 @@ pub mod rustyzip_lib {      // make mod pub so that its pub names can be linked 
     pub mod gzip;
 }
 pub mod common {
-    pub mod bitstream;
-    pub mod apputil;
-    pub mod strutil;
     pub mod ioutil;
-//    pub mod netutil;
 }
 
 
