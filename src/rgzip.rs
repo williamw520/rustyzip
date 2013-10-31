@@ -13,8 +13,6 @@
  *
  ******************************************************************************/
 
-// export RUST_LOG=rgzip,rustyzip
-
 
 extern mod extra;
 extern mod rustyzip;
@@ -25,25 +23,16 @@ use std::vec;
 use std::result::{Result, Ok, Err};
 use extra::getopts::{optflag, optopt, getopts};
 use std::path::Path;
-//use std::rt::io::stdio;
-use std::rt::io::DEFAULT_BUF_SIZE;
 use std::rt::io::file;
 use std::rt::io::file::FileStream;
-use std::rt::io::{Reader, Writer};
-use std::rt::io::{Open, Create};
-use std::rt::io::{Read, Write};
-use std::rt::io::io_error;
+use std::rt::io::{Reader, Writer, Open, Create, Read, Write, io_error};
 
 use rustyzip::rustyzip_lib::gzip;
-use rustyzip::rustyzip_lib::gzip::GZip;
-use rustyzip::rustyzip_lib::gzip::GZipReader;
-use rustyzip::rustyzip_lib::gzip::GZipWriter;
+use rustyzip::rustyzip_lib::gzip::{GZip, GZipReader, GZipWriter};
+
+
 
 static VERSION_STR : &'static str = "0.8";
-static MIN_SIZE_FACTOR : uint = 5;      // minimum size factor: 2^5 * 1K = 32K
-static DEFAULT_SIZE_FACTOR : uint = 8;  // default size factor: 2^8 * 1K = 256K
-
-
 
 
 enum Cmd {
@@ -55,6 +44,7 @@ struct Options {
     stdout:         bool,
     force:          bool,
     no_name:        bool,
+    name:           bool,
     quiet:          bool,
     verbose:        bool,
     compress_level: uint,
@@ -72,11 +62,12 @@ impl Options {
             stdout: false,
             force: false,
             no_name: false,
+            name: false,
             quiet: false,
             verbose: false,
             compress_level: gzip::DEFAULT_COMPRESS_LEVEL,
             use_pipe: true,
-            size_factor: DEFAULT_SIZE_FACTOR,
+            size_factor: gzip::DEFAULT_SIZE_FACTOR,
             files: ~[],
         };
         let opts = ~[
@@ -94,6 +85,8 @@ impl Options {
                      optflag("force"),
                      optflag("n"),
                      optflag("no-name"),
+                     optflag("N"),
+                     optflag("name"),
                      optflag("q"),
                      optflag("quiet"),
                      optflag("v"),
@@ -124,6 +117,7 @@ impl Options {
                 options.stdout = matches.opt_present("c") || matches.opt_present("stdout");
                 options.force = matches.opt_present("f") || matches.opt_present("force");
                 options.no_name = matches.opt_present("n") || matches.opt_present("no-name");
+                options.name = matches.opt_present("N") || matches.opt_present("name");
                 options.quiet = matches.opt_present("q") || matches.opt_present("quiet");
                 options.verbose = matches.opt_present("v") || matches.opt_present("verbose");
                 for level in range(0u, 10u) {
@@ -131,9 +125,9 @@ impl Options {
                     options.compress_level = if matches.opt_present(slevel) { level } else { options.compress_level };
                 }
                 options.use_pipe = !matches.opt_present("Pipe");
-                let mut size_factor = if matches.opt_present("bufsize") { maybe_to_num(matches.opt_str("bufsize"), DEFAULT_SIZE_FACTOR) } else { DEFAULT_SIZE_FACTOR };
-                size_factor = if matches.opt_present("b")       { maybe_to_num(matches.opt_str("b"), size_factor) } else { size_factor };
-                options.size_factor = num::max(MIN_SIZE_FACTOR, size_factor);
+                let mut size_factor = if matches.opt_present("bufsize") { maybe_to_num(matches.opt_str("bufsize"), gzip::DEFAULT_SIZE_FACTOR) } else { gzip::DEFAULT_SIZE_FACTOR };
+                size_factor = if matches.opt_present("b")               { maybe_to_num(matches.opt_str("b"), size_factor) } else { size_factor };
+                options.size_factor = num::max(gzip::MIN_SIZE_FACTOR, size_factor);
                 options.files = matches.free;
 
                 debug!( fmt!("options = %?", options) );
@@ -194,7 +188,32 @@ fn open_compressed_writer(options: &Options, filepath: &Path) -> Result<FileStre
 
     match file::open(&out_filepath, Create, Write) {
         Some(writer_stream) => Ok(writer_stream),
-        None => Err(~"Failed to open file for write.")
+        None => Err(fmt!("Failed to open file %s for write.", out_filepath.to_str()))
+    }
+}
+
+fn compress_pipe_loop<R: Reader, W: Writer>(mut stream_reader: R, mut stream_writer: W, filepath: &Path, options: &Options) -> ~str {
+    let file_name = if options.no_name { &"" } else { filepath.filename().unwrap_or(&"") };
+    let mut mtime = 0u32;
+    let mut file_size = 0u32;
+
+    match file::stat(filepath) {
+        Some(fs) => {
+            mtime = if options.no_name { 0u32 } else { (fs.modified / 1000) as u32 };
+            file_size = fs.size as u32;
+        },
+        None => ()
+    }
+
+    match GZip::compress_init(&mut stream_writer, file_name, mtime, file_size) {
+        Ok(gzip) => {
+            let mut gzip = gzip;
+            match gzip.compress_pipe(&mut stream_reader, &mut stream_writer, options.compress_level, options.size_factor) {
+                Ok(_)   => ~"",
+                Err(s)  => s
+            }
+        },
+        Err(s) => s
     }
 }
 
@@ -229,68 +248,46 @@ fn compress_write_loop<R: Reader, W: Writer>(mut stream_reader: R, stream_writer
                     }
                 }
             }
-            return ~"";
+            ~""
         },
         Err(s) =>
-            return fmt!("%?", s)
+            s
     }
 }
 
-fn compress_pipe_loop<R: Reader, W: Writer>(mut stream_reader: R, mut stream_writer: W, filepath: &Path, options: &Options) -> ~str {
-    let file_name = filepath.filename().unwrap_or(&"");
-    let mut mtime = 0u32;
-    let mut file_size = 0u32;
-
-    match file::stat(filepath) {
-        Some(fs) => {
-            mtime = (fs.modified / 1000) as u32;
-            file_size = fs.size as u32;
-        },
-        None => ()
-    }
-
-    match GZip::compress_init(&mut stream_writer, file_name, mtime, file_size) {
-        Ok(gzip) => {
-            let mut gzip = gzip;
-            match gzip.compress_pipe(&mut stream_reader, &mut stream_writer, options.compress_level, options.size_factor) {
-                Ok(_)   => ~"",
-                Err(s)  => s
-            }
-        },
-        Err(s) => s
-    }
-}
-
-fn compress_file(options: &Options, file: &str) -> ~str {
+fn compress_file(options: &Options, file: &str) -> ~[~str] {
+    let mut results : ~[~str] = ~[];
 
     let filepath = Path(file);
-
     if filepath.filetype().unwrap_or("").to_ascii().to_lower().to_str_ascii().equals(&~".gz") {
-        return fmt!("File %s already has the .gz suffix -- unchanged", file);
+        results.push(fmt!("File %s already has the .gz suffix -- unchanged", file));
+        return results;
     }
 
-    let mut result = ~"working";
     do io_error::cond.trap(|c| {
-        println(fmt!("trap99 %?", c));
-        fail2!(fmt!("trap %?", c));
+        results.push(c.to_str());
     }).inside {
-        let stream_reader = match file::open(&filepath, Open, Read) {
-            Some(reader) => reader,
-            None => fail2!("whoops! I'm sure this raised, anyways..")
-        };
-        let stream_writer = match open_compressed_writer(options, &filepath) {
-            Ok(writer) => writer,
-            Err(err) => fail2!(fmt!("%?", err))
-        };
-
-        result = if options.use_pipe {
-            compress_pipe_loop(stream_reader, stream_writer, &filepath, options)
-        } else {
-            compress_write_loop(stream_reader, stream_writer, &filepath, options)
-        };
+        match file::open(&filepath, Open, Read) {
+            Some(stream_reader) => {
+                match open_compressed_writer(options, &filepath) {
+                    Ok(stream_writer) => {
+                        let result = if options.use_pipe {
+                            compress_pipe_loop(stream_reader, stream_writer, &filepath, options)
+                        } else {
+                            compress_write_loop(stream_reader, stream_writer, &filepath, options)
+                        };
+                        results.push(result);
+                    },
+                    Err(errstr) => 
+                        results.push(fmt!("%s %s", errstr, filepath.to_str()))
+                }
+            },
+            None => 
+                results.push(fmt!("Failed to open file %s", filepath.to_str()))
+        }
     }
 
-    result
+    results
 }
 
 
@@ -313,143 +310,152 @@ fn open_decompressed_writer(options: &Options, filepath: &Path) -> Result<FileSt
     }
 }
 
-fn decompress_read_loop<R: Reader, W: Writer>(stream_reader: R, mut stream_writer: W, buf_size_factor: uint) -> Result<uint, ~str> {
-    match GZipReader::with_size_factor(stream_reader, buf_size_factor) {
-        Ok(gzip_reader) => {
-            let mut gzip_reader = gzip_reader;
-            let mut out_buf = ~[0u8, ..DEFAULT_BUF_SIZE];
-            loop {
-                match gzip_reader.read(out_buf) {
-                    Some(n) => stream_writer.write(out_buf.slice(0, n)),
-                    None    => break
-                }
-            }
-            stream_writer.flush();
-            Ok(0)
-        },
-        Err(s) =>
-            Err(fmt!("%?", s))
-    }
-}
-
-fn decompress_pipe_loop<R: Reader, W: Writer>(mut stream_reader: R, mut stream_writer: W, buf_size_factor: uint) -> Result<uint, ~str> {
+fn decompress_pipe_loop<R: Reader>(mut stream_reader: R, out_file: &str, options: &Options) -> ~str {
     match GZip::decompress_init(&mut stream_reader) {
         Ok(gzip) => {
-            let mut gzip = gzip;
-            match gzip.decompress_pipe(&mut stream_reader, &mut stream_writer, buf_size_factor) {
-                Ok(_)   => Ok(0),
-                Err(s)  => Err(s)
+            let decomp_filename = if options.name { gzip.filename.clone().unwrap_or(out_file.to_owned()) } else { out_file.to_owned() };
+            let decomp_filepath = Path(decomp_filename);
+            match open_decompressed_writer(options, &decomp_filepath) {
+                Ok(stream_writer) => {
+                    let mut stream_writer = stream_writer;
+                    let mut gzip = gzip;
+                    match gzip.decompress_pipe(&mut stream_reader, &mut stream_writer, options.size_factor) {
+                        Ok(_)   => ~"",
+                        Err(s)  => s
+                    }
+                },
+                Err(errstr) => 
+                    fmt!("%s %s", errstr, decomp_filepath.to_str())
             }
         },
-        Err(s) =>
-            Err(fmt!("%?", s))
+        Err(s) => s
     }
 }
 
-fn decompress_file(options: &Options, file: &str) -> Result<uint, ~str> {
-
-    let filepath = Path(file);
-
-    // Check for valid filetype
-    match filepath.filetype() {
-        Some(filetype) => {
-            if !filetype.to_ascii().to_lower().to_str_ascii().equals(&~".gz") {
-                return Err(fmt!("Error: file %s does not have the .gz suffix.", file));
+fn decompress_read_loop<R: Reader>(stream_reader: R, out_file: &str, options: &Options) -> ~str {
+    match GZipReader::with_size_factor(stream_reader, options.size_factor) {
+        Ok(gzip_reader) => {
+            let decomp_filename = if options.name { gzip_reader.gzip.filename.clone().unwrap_or(out_file.to_owned()) } else { out_file.to_owned() };
+            let decomp_filepath = Path(decomp_filename);
+            match open_decompressed_writer(options, &decomp_filepath) {
+                Ok(stream_writer) => {
+                    let mut stream_writer = stream_writer;
+                    let mut gzip_reader = gzip_reader;
+                    let mut out_buf = vec::from_elem(gzip::calc_buf_size(options.size_factor), 0u8);
+                    loop {
+                        match gzip_reader.read(out_buf) {
+                            Some(n) => stream_writer.write(out_buf.slice(0, n)),
+                            None    => break
+                        }
+                    }
+                    stream_writer.flush();
+                    ~""
+                },
+                Err(errstr) => 
+                    fmt!("%s %s", errstr, decomp_filepath.to_str())
             }
+            
         },
-        None =>
-            return Err(fmt!("Error: file %s has no .gz suffix.", file))
+        Err(s) => s
     }
-
-    let mut result = Ok(0);
-    do io_error::cond.trap(|c| {
-        println(fmt!("trap %?", c));
-        fail2!(fmt!("trap %?", c));
-    }).inside {
-        let stream_reader = match file::open(&filepath, Open, Read) {
-            Some(reader) => reader,
-            None => fail2!("whoops! I'm sure this raised, anyways..")
-        };
-        let stream_writer = match open_decompressed_writer(options, &filepath) {
-            Ok(writer) => writer,
-            Err(err) => fail2!(fmt!("%?", err))
-        };
-
-        result = if options.use_pipe {
-            decompress_pipe_loop(stream_reader, stream_writer, options.size_factor)
-        } else {
-            decompress_read_loop(stream_reader, stream_writer, options.size_factor)
-        };
-    }
-
-    result
 }
 
-fn list_file(file: &str) -> Result<~str, ~str> {
-
-    let filepath = Path(file);
+fn decompress_file(options: &Options, file: &str) -> ~[~str] {
+    let mut results : ~[~str] = ~[];
 
     // Check for valid filetype
+    let filepath = Path(file);
     match filepath.filetype() {
         Some(filetype) => {
             if !filetype.to_ascii().to_lower().to_str_ascii().equals(&~".gz") {
-                return Err(fmt!("Error: file %s does not have the .gz suffix.", file));
+                results.push(fmt!("File %s does not have the .gz suffix.  No action.", file))
             }
         },
         None =>
-            return Err(fmt!("Error: file %s has no .gz suffix.", file))
+            results.push(fmt!("File %s has no .gz suffix.  No action.", file))
     };
+    if results.len() > 0 {
+        return results;
+    }
+
+    do io_error::cond.trap(|c| {
+        results.push(c.to_str());
+    }).inside {
+        match file::open(&filepath, Open, Read) {
+            Some(stream_reader) => {
+                let result = if options.use_pipe {
+                    decompress_pipe_loop(stream_reader, file, options)
+                } else {
+                    decompress_read_loop(stream_reader, file, options)
+                };
+                results.push(result);
+            },
+            None => 
+                results.push(fmt!("Failed to open file %s", filepath.to_str()))
+        }
+    }
+    results
+}
+
+fn list_file(file: &str) -> ~[~str] {
+    let mut results : ~[~str] = ~[];
+
+    // Check for valid filetype
+    let filepath = Path(file);
+    match filepath.filetype() {
+        Some(filetype) => {
+            if !filetype.to_ascii().to_lower().to_str_ascii().equals(&~".gz") {
+                results.push(fmt!("File %s does not have the .gz suffix.  No action.", file))
+            }
+        },
+        None =>
+            results.push(fmt!("File %s has no .gz suffix.  No action.", file))
+    };
+    if results.len() > 0 {
+        return results;
+    }
 
     let file_size = match file::stat(&filepath) {
         Some(fs)    => fs.size,
         None        => 0
     };
 
-    let mut result = Ok(~"");
     do io_error::cond.trap(|c| {
-        println(fmt!("trap %?", c));
-        fail2!(fmt!("trap %?", c));
+        results.push(c.to_str());
     }).inside {
-        let mut stream_reader = match file::open(&filepath, Open, Read) {
-            Some(reader) => reader,
-            None => fail2!("whoops! I'm sure this raised, anyways..")
-        };
-
-        result = match GZip::read_info(&mut stream_reader) {
-            Ok(gzip) => {
-                Ok(fmt!("%10u %10u %5.1f%% %s", file_size as uint, gzip.original_size as uint, (file_size as f64 * 100f64 / gzip.original_size as f64), gzip.filename.unwrap()))
+        match file::open(&filepath, Open, Read) {
+            Some(stream_reader) => {
+                let mut stream_reader = stream_reader;
+                match GZip::read_info(&mut stream_reader) {
+                    Ok(gzip) => {
+                        results.push(fmt!("%10u  %10u %5.1f%%  %s", 
+                                          file_size as uint, 
+                                          gzip.original_size as uint, 
+                                          (file_size as f64 * 100f64 / gzip.original_size as f64), 
+                                          gzip.filename.unwrap_or(~"")));
+                    },
+                    Err(errstr) =>
+                        results.push(fmt!("%s %s", errstr, filepath.to_str()))
+                }
             },
-            Err(s) =>
-                Err(fmt!("%?", s))
-        };
+            None => 
+                results.push(fmt!("Failed to open file %s", filepath.to_str()))
+        }
     }
 
-    return result;
+    results
 }
 
 
-fn print_str(text: &str) {
-    if text.len() > 0 {
-        println(text);
-    }
-}
-
-fn print_err(result: Result<uint, ~str>) {
-    match result {
-        Ok(_)   => (),
-        Err(s)  => println(s)
-    }
-}
-
-fn print_result(result: Result<~str, ~str>) {
-    match result {
-        Ok(s)   => println(s),
-        Err(s)  => println(s)
+fn print_lines(lines: ~[~str]) {
+    for line in lines.iter() {
+        if line.len() > 0 {
+            println(*line);
+        }
     }
 }
 
 fn main()  {
-
     let args = os::args();
     match Options::from_args(&args) {
         Ok(options) => {
@@ -460,18 +466,18 @@ fn main()  {
                     print_version(&args),
                 COMPRESS => {
                     for file in options.files.iter() {
-                        print_str(compress_file(&options, *file));
+                        print_lines(compress_file(&options, *file));
                     }
                 },
                 DECOMPRESS => {
                     for file in options.files.iter() {
-                        print_err(decompress_file(&options, *file));
+                        print_lines(decompress_file(&options, *file));
                     }
                 },
                 LIST => {
-                    println("compressed uncompress  ratio uncompressed_name");
+                    println("compressed  uncompress  ratio  uncompressed_name");
                     for file in options.files.iter() {
-                        print_result(list_file(*file));
+                        print_lines(list_file(*file));
                     }
                 }
             }
@@ -481,5 +487,4 @@ fn main()  {
             print_usage(&args);
         }
     }
-
 }
