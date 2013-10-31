@@ -47,11 +47,3 @@ test-lib:
 	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS) --test $(SRC_DIR)/lib.rs
 	@$(BUILD_DIR)/lib
 
-test-bitstream:
-	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS) --test $(SRC_DIR)/common/bitstream.rs
-	@$(BUILD_DIR)/bitstream
-
-test-strutil:
-	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS) --test $(SRC_DIR)/common/strutil.rs
-	@$(BUILD_DIR)/strutil
-

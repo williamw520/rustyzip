@@ -34,7 +34,3 @@ pub mod rustyzip_lib {      // make mod pub so that its pub names can be linked 
     pub mod deflate;
     pub mod gzip;
 }
-pub mod common {
-    pub mod ioutil;
-}
-

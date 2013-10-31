@@ -14,12 +14,8 @@
  ******************************************************************************/
 
 
-use std::rt::io::Reader;
-use std::rt::io::Writer;
-use std::vec;
-use std::num;
-use std::ptr;
-
+use std::rt::io::{Reader, Writer};
+use std::{vec, num, ptr};
 use std::libc::{c_void, size_t, c_int, c_uint};
 
 

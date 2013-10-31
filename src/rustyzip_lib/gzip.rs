@@ -13,25 +13,19 @@
  *
  ******************************************************************************/
 
+use std::str;
 use std::num;
 use std::vec;
-use std::rt::io::Reader;
-use std::rt::io::Writer;
-use std::rt::io::Decorator;
-use std::rt::io::WriterByteConversions;
+use std::rt::io::{Reader, Writer, ReaderUtil, Decorator, ReaderByteConversions, WriterByteConversions};
 use std::rt::io::{read_error, IoError, OtherIoError};
 use std::rt::io::file::FileStream;
-use std::rt::io::Seek;
-use std::rt::io::SeekEnd;
+use std::rt::io::{Seek, SeekEnd};
 
-use common::ioutil;
-use common::ioutil::ReaderEx;
+
 use super::deflate;
 use super::deflate::Deflator;
 use super::deflate::Inflator;
-use super::deflate::DEFLATE_STATUS_OKAY;
-use super::deflate::DEFLATE_STATUS_DONE;
-use super::deflate::INFLATE_STATUS_DONE;
+use super::deflate::{DEFLATE_STATUS_OKAY, DEFLATE_STATUS_DONE, INFLATE_STATUS_DONE};
 
 
 /// The buf_size_factor for internal IO buffers.
@@ -121,7 +115,8 @@ impl GZip {
         match gzip.readHeader(file_reader).and_then( |_| gzip.readHeaderExtra(file_reader) ) {
             Ok(_)   => {
                 file_reader.seek(-END_LENGTH as i64, SeekEnd);
-                let end_buf = file_reader.read_upto(END_LENGTH);
+                let mut end_buf = [0u8, ..END_LENGTH];
+                read_buf_upto(file_reader, end_buf, 0, END_LENGTH);
                 match gzip.readEndSection(end_buf, end_buf.len()) {
                     Ok(_)   => Ok(gzip),
                     Err(s)  => Err(s)
@@ -192,7 +187,7 @@ impl GZip {
                 vec::bytes::copy_memory(end_buf, rest_buf, copy_len);
                 extra_buf.push_all(rest_buf.slice_from(copy_len));  // Move anything beyond the gzip end section into extra_buf.
                 if end_len < END_LENGTH {                           // Read in the rest of end section if not enough data in rest_buf
-                    end_len += reader.read_buf_upto(end_buf, end_len, END_LENGTH - end_len);
+                    end_len += read_buf_upto(reader, end_buf, end_len, END_LENGTH - end_len);
                 }
             } );
         inflator.free();
@@ -213,7 +208,7 @@ impl GZip {
     fn readHeader<R: Reader>(&mut self, reader: &mut R) -> Result<uint, ~str> {
 
         let mut buf = [0, ..HEADER_FIXED_LEN];
-        if reader.read_buf_upto(buf, 0, HEADER_FIXED_LEN) != HEADER_FIXED_LEN {
+        if read_buf_upto(reader, buf, 0, HEADER_FIXED_LEN) != HEADER_FIXED_LEN {
             return Err(~"Too few data to be a valid gzip format.");
         }
 
@@ -221,7 +216,7 @@ impl GZip {
         self.id2 = buf[1];
         self.compression = buf[2];
         self.flags = buf[3];
-        self.mtime = ioutil::unpack_u32_le(buf, 4);
+        self.mtime = unpack_u32_le(buf, 4);
         self.xflags = buf[8];
         self.os = buf[9];
 
@@ -238,20 +233,23 @@ impl GZip {
     fn readHeaderExtra<R: Reader>(&mut self, reader: &mut R) -> Result<uint, ~str> {
 
         if (self.flags & FEXTRA) == FEXTRA {
-            self.xfield_len = Some(reader.read_u16_le());
-            self.xfield = Some(reader.read_upto(self.xfield_len.unwrap() as uint));
+            self.xfield_len = Some(reader.read_le_u16_());
+            let xf_len = self.xfield_len.unwrap() as uint;
+            let mut buf = vec::from_elem(xf_len, 0u8);
+            read_buf_upto(reader, buf, 0, xf_len);
+            self.xfield = Some(buf);
         }
 
         if (self.flags & FNAME) == FNAME {
-            self.filename = Some(reader.read_strz());
+            self.filename = Some(read_strz(reader));
         }
 
         if (self.flags & FCOMMENT) == FCOMMENT {
-            self.comment = Some(reader.read_strz());
+            self.comment = Some(read_strz(reader));
         }
 
         if (self.flags & FHCRC) == FHCRC {
-            self.header_crc = Some(reader.read_u16_le());
+            self.header_crc = Some(reader.read_le_u16_());
         }
 
         Ok(0)
@@ -261,8 +259,8 @@ impl GZip {
         if end_len < END_LENGTH {
             return Err(fmt!("Not enough data in gzip end section.  Bytes missing: %?", (END_LENGTH - end_len)));
         }
-        self.crc32 = ioutil::unpack_u32_le(end_buf, 0);
-        self.original_size = ioutil::unpack_u32_le(end_buf, 4);
+        self.crc32 = unpack_u32_le(end_buf, 0);
+        self.original_size = unpack_u32_le(end_buf, 4);
         Ok(0)
     }
 
@@ -328,7 +326,7 @@ impl GZip {
         buf[1] = self.id2;
         buf[2] = self.compression;
         buf[3] = self.flags;
-        ioutil::pack_u32_le(buf, 4, self.mtime);
+        pack_u32_le(buf, 4, self.mtime);
         buf[8] = self.xflags;
         buf[9] = self.os;
 
@@ -344,12 +342,12 @@ impl GZip {
         }
 
         if (self.flags & FNAME) == FNAME {
-            let buf = ioutil::to_strz(self.filename.clone().unwrap());
+            let buf = to_strz(self.filename.clone().unwrap());
             writer.write(buf);
         }
 
         if (self.flags & FCOMMENT) == FCOMMENT {
-            let buf = ioutil::to_strz(self.comment.clone().unwrap());
+            let buf = to_strz(self.comment.clone().unwrap());
             writer.write(buf);
         }
 
@@ -363,8 +361,8 @@ impl GZip {
     fn writeEndSection<W: Writer>(&self, writer: &mut W) {
         let mut end_buf = [0, ..END_LENGTH];
 
-        ioutil::pack_u32_le(end_buf, 0, self.crc32);
-        ioutil::pack_u32_le(end_buf, 4, self.original_size);
+        pack_u32_le(end_buf, 0, self.crc32);
+        pack_u32_le(end_buf, 4, self.original_size);
         writer.flush();
         writer.write(end_buf);
         writer.flush();
@@ -447,7 +445,7 @@ impl<R: Reader> Reader for GZipReader<R> {
                 // Move the rest of the bytes into end_buf, and read more into end_buf if not enough bytes for it.
                 end_len = self.inflator.get_rest(end_buf);
                 if end_len < END_LENGTH {
-                    end_len += self.inner_reader.read_buf_upto(end_buf, end_len, END_LENGTH - end_len);
+                    end_len += read_buf_upto(&mut self.inner_reader, end_buf, end_len, END_LENGTH - end_len);
                 }
                 match self.gzip.readEndSection(end_buf, end_len)
                     .and_then( |_| self.gzip.checkCrc() ) {
@@ -595,6 +593,60 @@ impl<W: Writer> Decorator<W> for GZipWriter<W> {
     fn inner_mut_ref<'a>(&'a mut self) -> &'a mut W {
         &mut self.inner_writer
     }
+}
+
+
+/// Pack a u32 into byte buffer in little-endian
+fn pack_u32_le(buf: &mut [u8], offset: uint, value: u32) -> uint {
+    buf[offset + 0] = (value >> 0) as u8;
+    buf[offset + 1] = (value >> 8) as u8;
+    buf[offset + 2] = (value >> 16) as u8;
+    buf[offset + 3] = (value >> 24) as u8;
+    offset + 4
+}
+
+/// Unpack a u32 from byte buffer in little-endian
+fn unpack_u32_le(buf: &[u8], offset: uint) -> u32 {
+    ( ((buf[offset + 0] as u32) & 0xFF)       ) |
+    ( ((buf[offset + 1] as u32) & 0xFF) << 8  ) |
+    ( ((buf[offset + 2] as u32) & 0xFF) << 16 ) |
+    ( ((buf[offset + 3] as u32) & 0xFF) << 24 )
+}
+
+fn to_strz(str_value: &str) -> ~[u8] {
+    let str_bytes = str_value.as_bytes();
+    let mut buf = vec::from_elem(str_bytes.len() + 1, 0u8);
+    vec::bytes::copy_memory(buf, str_bytes, str_bytes.len());
+    buf[buf.len() - 1] = 0;
+    return buf;
+}
+
+// Read a zero-terminated str.  Read until encountering the terminating 0.
+fn read_strz<R: Reader>(reader: &mut R) -> ~str {
+    let mut buf = ~[];
+    loop {
+        match reader.read_byte() {
+            Some(0)     => break,
+            Some(ch)    => buf.push(ch),
+            None        => break
+        }
+    }
+    return str::from_utf8(buf);
+}
+
+fn read_buf_upto<R: Reader>(reader: &mut R, buf: &mut [u8], offset: uint, len_to_read: uint) -> uint {
+    let mut total_read = 0u;
+    while total_read < len_to_read {
+        let remaining_len = len_to_read - total_read;
+        let begin = offset + total_read;
+        let end   = offset + total_read + remaining_len;
+        let slice_buf = buf.mut_slice(begin, end);
+        match reader.read(slice_buf) {
+            Some(read_len) => total_read = total_read + read_len,
+            None => break
+        }
+    }
+    return total_read;
 }
 
 

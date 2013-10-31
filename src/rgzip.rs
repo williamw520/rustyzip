@@ -157,10 +157,7 @@ fn to_num<T: FromStr>(s : &str, default_value : T) -> T {
 
 fn get_program(args: &~[~str]) -> ~str {
     let path: Path = GenericPath::from_str((*args)[0]);
-    match path.filestem() {
-        Some(name) => { name.to_owned() },
-        None => ~""
-    }
+    path.filestem().unwrap_or(&"").to_owned()
 }
 
 fn print_usage(args: &~[~str]) {
