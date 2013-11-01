@@ -10,4 +10,9 @@ Compression in Rust
 RustyZip is a collection of compression routines for Rust.
 
 
-#### Status: project is under development and it's not even alpha ready.
+#### Status:
+
+- GZip library is ready.
+- GZip command line tool is ready.
+- DEFLATE library is ready, with stream and pipe API in Rust.
+
