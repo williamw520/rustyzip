@@ -76,6 +76,10 @@ static TDEFL_NUM_PROBES : [c_uint, ..10] = [ 0 as c_uint, 1, 8, 16, 32, 128, 256
 /// The minimum output buffer size for decompression.  Max size of the LZ dictionary is 32K at the beginning of an out_buf.
 pub static MIN_DECOMPRESS_BUF_SIZE : uint = 32768;
 
+/// The buf_size_factor for internal IO buffers.
+pub static MIN_SIZE_FACTOR : uint = 5;      // minimum size factor: 2^5 * 1K = 32K
+pub static DEFAULT_SIZE_FACTOR : uint = 8;  // default size factor: 2^8 * 1K = 256K
+
 // Redefine flags here for internal use
 static TDEFL_WRITE_ZLIB_HEADER : c_uint             = 0x01000;
 static TDEFL_COMPUTE_ADLER32 : c_uint               = 0x02000;
@@ -152,7 +156,7 @@ pub struct Deflator {
 impl Deflator {
     /// Create the Deflator structure and allocate the underlying tdefl_compressor structure.
     pub fn new() -> Deflator {
-        Deflator::with_size_factor(1)
+        Deflator::with_size_factor(MIN_SIZE_FACTOR)
     }
 
     pub fn with_size_factor(buf_size_factor: uint) -> Deflator {
@@ -418,14 +422,12 @@ pub struct Inflator {
 impl Inflator {
     /// Create the Inflator structure and allocate the underlying tdefl_compressor structure.
     pub fn new() -> Inflator {
-        Inflator::with_size_factor(1)
+        Inflator::with_size_factor(MIN_SIZE_FACTOR)
     }
 
     pub fn with_size_factor(buf_size_factor: uint) -> Inflator {
         #[fixed_stack_segment];
         #[inline(never)];
-        // println(fmt!("buf_size_factor:  %?", buf_size_factor));
-        // println(fmt!("buf_size:  %?", calc_buf_size(buf_size_factor) * 2));
         unsafe {
             Inflator {
                 tinfl_decompressor: rustrt::tinfl_decompressor_alloc(),
