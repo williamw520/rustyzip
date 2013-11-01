@@ -491,11 +491,16 @@ pub struct GZipWriter<W> {
 
 impl<W: Writer> GZipWriter<W> {
 
+    /// Create a GZipWriter to compress data automatically when writing, with bare minimal info.
+    pub fn new(inner_writer: W) -> Result<GZipWriter<W>, ~str> {
+        GZipWriter::with_size_factor(inner_writer, "", 0u32, 0u32, DEFAULT_COMPRESS_LEVEL, DEFAULT_SIZE_FACTOR)
+    }
+
     /// Create a GZipWriter to compress data automatically when writing.
     /// file_name is the original filename to store in the gzip file.
     /// mtime is the original modified time to store in the gzip file.
     /// file_size is the original file size to store in the gzip file.
-    pub fn new(inner_writer: W, file_name: &str, mtime: u32, file_size: u32) -> Result<GZipWriter<W>, ~str> {
+    pub fn with_file_info(inner_writer: W, file_name: &str, mtime: u32, file_size: u32) -> Result<GZipWriter<W>, ~str> {
         GZipWriter::with_size_factor(inner_writer, file_name, mtime, file_size, DEFAULT_COMPRESS_LEVEL, DEFAULT_SIZE_FACTOR)
     }
 
