@@ -318,15 +318,12 @@ impl Deflator {
             let mut in_bytes = self.in_buf_total - self.in_offset;      // number of bytes to compress in this batch;
             let mut out_bytes = out_buf_total - self.out_offset;        // number of bytes of space avaiable in the out_buf;
             let final_input = (final_write && input_remaining == 0);    // final_write and last batch in input_buf;
-            debug!(fmt!("compress_buf in:  in_offset: %?, in_bytes: %?, out_offset: %?, out_bytes: %?, final_input: %?", self.in_offset, in_bytes, self.out_offset, out_bytes, final_input));
             let status = self.compress_buf(self.in_buf, self.in_offset, &mut in_bytes, self.out_buf, self.out_offset, &mut out_bytes, final_input);
             self.in_offset += in_bytes;                                 // advance offset by the number of bytes consumed;
             self.out_offset += out_bytes;                               // advance offset by the number of bytes written;
-            debug!(fmt!("compress_buf out: in_offset: %?, in_bytes: %?, out_offset: %?, out_bytes: %?, status: %?", self.in_offset, in_bytes, self.out_offset, out_bytes, status));
 
             match status {
                 DEFLATE_STATUS_OKAY => {
-                    debug!(fmt!("write_fn: out_offset: %u, out_buf_total: %u, write_len: %u", self.out_offset, out_buf_total, (out_buf_total-self.out_offset)));
                     // If out_buf is full, write its content out.  Reset it.
                     if self.out_offset == out_buf_total {
                         write_fn(self.out_buf, false);
@@ -335,11 +332,9 @@ impl Deflator {
                     }
                 },
                 DEFLATE_STATUS_DONE => {
-                    debug!(fmt!("write_fn final: write_len: %u", self.out_offset));
                     // Write the remaining content in out_buf out.
                     write_fn(self.out_buf.slice(0, self.out_offset), true);
                     self.write_total += self.out_offset;
-                    debug!(fmt!("compress_write done: read_total: %u, write_total: %u", self.read_total, self.write_total));
                     return DEFLATE_STATUS_DONE;
                 },
                 _ => return status  // Return error
@@ -551,7 +546,7 @@ impl Inflator {
     /// Decompress one batch of input data at a time.  The decompressed data are returned in output_buf.
     /// The length of the output data is returned in Ok(output_len).
     /// Caller calls this function in a loop to read all the decompressed data until output_len is 0.
-    //  This approach has more more buffer copyings than the pipe approach. 
+    //  This approach has more buffer copyings than the pipe approach. 
     /// The input data to decompress are supplied by the read_fn callback function from caller.
     /// The decompressed data are returned to caller one batch at a time.
     /// After reaching the end of output, the remaining unprocessed input data can be retrieved with get_rest().
@@ -694,7 +689,7 @@ mod tests {
     use std::ptr;
     use std::rand;
     use std::rand::Rng;
-    use super::*;
+//    use super::*;
 
     #[test]
     fn test_deflator_alloc() {

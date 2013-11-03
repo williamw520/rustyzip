@@ -16,8 +16,8 @@
 use std::str;
 use std::num;
 use std::vec;
-use std::rt::io::{Reader, Writer, ReaderUtil, Decorator, ReaderByteConversions, WriterByteConversions};
-use std::rt::io::{read_error, IoError, OtherIoError};
+use std::rt::io::{Reader, Writer, Decorator};
+use std::rt::io::{io_error, IoError, OtherIoError};
 use std::rt::io::file::FileStream;
 use std::rt::io::{Seek, SeekEnd};
 
@@ -201,7 +201,7 @@ impl GZip {
                 }
             },
             _ => 
-                Err(fmt!("Failed to decompress data.  Status: %?", status))
+                Err(format!("Failed to decompress data.  Status: {:?}", status))
         }
     }
 
@@ -233,7 +233,7 @@ impl GZip {
     fn readHeaderExtra<R: Reader>(&mut self, reader: &mut R) -> Result<uint, ~str> {
 
         if (self.flags & FEXTRA) == FEXTRA {
-            self.xfield_len = Some(reader.read_le_u16_());
+            self.xfield_len = Some(reader.read_le_u16());
             let xf_len = self.xfield_len.unwrap() as uint;
             let mut buf = vec::from_elem(xf_len, 0u8);
             read_buf_upto(reader, buf, 0, xf_len);
@@ -249,7 +249,7 @@ impl GZip {
         }
 
         if (self.flags & FHCRC) == FHCRC {
-            self.header_crc = Some(reader.read_le_u16_());
+            self.header_crc = Some(reader.read_le_u16());
         }
 
         Ok(0)
@@ -257,7 +257,7 @@ impl GZip {
 
     fn readEndSection(&mut self, end_buf: &[u8], end_len: uint) -> Result<uint, ~str> {
         if end_len < END_LENGTH {
-            return Err(fmt!("Not enough data in gzip end section.  Bytes missing: %?", (END_LENGTH - end_len)));
+            return Err(format!("Not enough data in gzip end section.  Bytes missing: {:u}", (END_LENGTH - end_len)));
         }
         self.crc32 = unpack_u32_le(end_buf, 0);
         self.original_size = unpack_u32_le(end_buf, 4);
@@ -314,7 +314,7 @@ impl GZip {
                 Ok(0)
             },
             _ => 
-                Err(fmt!("Failed to compress data.  Status: %?", status))
+                Err(format!("Failed to compress data.  Status: {:?}", status))
         }
     }
 
@@ -337,7 +337,7 @@ impl GZip {
     fn writeHeaderExtra<W: Writer>(&self, writer: &mut W) -> Result<uint, ~str> {
 
         if (self.flags & FEXTRA) == FEXTRA {
-            writer.write_le_u16_(self.xfield_len.unwrap());
+            writer.write_le_u16(self.xfield_len.unwrap());
             writer.write(self.xfield.clone().unwrap());
         }
 
@@ -352,7 +352,7 @@ impl GZip {
         }
 
         if (self.flags & FHCRC) == FHCRC {
-            writer.write_le_u16_(self.header_crc.unwrap());
+            writer.write_le_u16(self.header_crc.unwrap());
         }
 
         Ok(0)
@@ -363,7 +363,6 @@ impl GZip {
 
         pack_u32_le(end_buf, 0, self.crc32);
         pack_u32_le(end_buf, 4, self.original_size);
-        writer.flush();
         writer.write(end_buf);
         writer.flush();
     }
@@ -451,10 +450,10 @@ impl<R: Reader> Reader for GZipReader<R> {
                     .and_then( |_| self.gzip.checkCrc() ) {
                     Ok(_)   => return None,
                     Err(e)  => {
-                        read_error::cond.raise(IoError {
+                        io_error::cond.raise(IoError {
                                 kind: OtherIoError,
                                 desc: "Read failure in decompression",
-                                detail: Some(fmt!("Failure in reading end section.  %?", e))
+                                detail: Some(format!("Failure in reading end section.  {:?}", e))
                             });
                         None
                     }
@@ -465,10 +464,10 @@ impl<R: Reader> Reader for GZipReader<R> {
                 return Some(output_len);
             },
             _ => {
-                read_error::cond.raise(IoError {
+                io_error::cond.raise(IoError {
                         kind: OtherIoError,
                         desc: "Read failure in decompression",
-                        detail: Some(fmt!("Read failure in deflate::decompress_read().  status: %?", status))
+                        detail: Some(format!("Read failure in deflate::decompress_read().  status: {:?}", status))
                     });
                 None
             }
@@ -539,7 +538,7 @@ impl<W: Writer> GZipWriter<W> {
 
     fn do_write(&mut self, output_buf: &[u8], final_write: bool) {
         if self.finalized {
-            read_error::cond.raise(IoError {
+            io_error::cond.raise(IoError {
                     kind: OtherIoError,
                     desc: "Writing on a closed stream",
                     detail: Some(~"The compression stream has been closed."),
@@ -563,10 +562,10 @@ impl<W: Writer> GZipWriter<W> {
                 self.finalized = true;
             },
             _ => {
-                read_error::cond.raise(IoError {
+                io_error::cond.raise(IoError {
                         kind: OtherIoError,
                         desc: "Write failure in compression",
-                        detail: Some(fmt!("Failure in compressing data.  %?", status))
+                        detail: Some(format!("Failure in compressing data.  {:?}", status))
                     });
             }
         }
@@ -696,7 +695,7 @@ pub fn generate_crc_table() {
         if n % 8 == 0 {
             output = output + "\n    ";
         }
-        output = output + fmt!("0x%Xu32, ", table[n] as uint);
+        output = output + format!("0x{:X}u32, ", table[n] as uint);
     }
     output = output + "\n];";
     println(output);
@@ -746,7 +745,7 @@ mod tests {
     use std::rt::io::mem::MemReader;
     use std::rand;
     use std::rand::Rng;
-    use super::*;
+//    use super::*;
 
     #[test]
     fn test_generate_crc_table() {
@@ -764,7 +763,7 @@ mod tests {
         let mut out_buf = [0u8, ..64];
         let out_len = gzip_reader.read(out_buf);
         let decomp_buf = out_buf.slice(0, out_len.unwrap());
-        println(fmt!("gzip_reader.read(): %?", decomp_buf));
+        println(format!("gzip_reader.read(): %?", decomp_buf));
     }
 
 }
