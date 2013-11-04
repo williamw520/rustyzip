@@ -25,7 +25,7 @@ $(BUILD_DIR)/$(BUILD_DIR).stamp:
 	@mkdir -p $(BUILD_DIR)
 	@touch $@
 
-$(BUILD_DIR)/$(RUSTYZIP_LIB).stamp: $(SRC_DIR)/extra/lib.rs  $(wildcard $(SRC_DIR)/extra/*)  $(wildcard $(SRC_DIR)/common/*)  $(wildcard $(SRC_DIR)/common/**/*)  $(BUILD_DIR)/$(BUILD_DIR).stamp
+$(BUILD_DIR)/$(RUSTYZIP_LIB).stamp: $(SRC_DIR)/libextra/lib.rs  $(wildcard $(SRC_DIR)/libextra/*)  $(BUILD_DIR)/$(BUILD_DIR).stamp
 	@echo "Building $<..."
 	@$(RUSTC) $(ROPTS)  $<
 	@touch $@

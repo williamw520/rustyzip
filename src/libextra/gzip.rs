@@ -135,7 +135,6 @@ impl GZip {
     /// Initialize a new GZip structure for decompression.  Read in the gzip header.
     /// Return the new GZip structure.
     pub fn decompress_init<R: Reader>(reader: &mut R) -> Result<GZip, ~str> {
-println("decompress_init");
         let mut gzip = GZip::new();
         match gzip.readHeader(reader).and_then( |_| gzip.readHeaderExtra(reader) ) {
             Ok(_)   => Ok(gzip),

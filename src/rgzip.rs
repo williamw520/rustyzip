@@ -165,7 +165,7 @@ fn to_num<T: FromStr>(s : &str, default_value : T) -> T {
 
 fn get_program(args: &~[~str]) -> ~str {
     let path: Path = Path::new((*args)[0].to_owned());
-    match path.filestem() {
+    match path.filestem_str() {
         Some(s) => s.to_str(),
         None    => ~""
     }
@@ -181,7 +181,7 @@ fn print_version(args: &~[~str]) {
 }
 
 fn get_file_name(filepath: &Path) -> ~str {
-    match filepath.filename() {
+    match filepath.filename_str() {
             Some(f) => f.to_str(), 
             None => ~""
     }
@@ -214,7 +214,7 @@ fn compress_stream_loop<R: Reader, W: Writer>(mut stream_reader: R, mut stream_w
 
     match file::stat(filepath) {
         Some(fs) => {
-            mtime = if options.no_name { 0u32 } else { (fs.modified / 1000) as u32 };
+            mtime = if options.no_name { 0u32 } else { (fs.modified) as u32 };
             file_size = fs.size as u32;
         },
         None => ()
@@ -310,7 +310,7 @@ fn open_decompressed_writer(options: &Options, filepath: &Path) -> Result<FileSt
         fail!("std::rt::io::stdout is not implemented yet");
     }
 
-    let filestem = match filepath.filestem() {
+    let filestem = match filepath.filestem_str() {
         Some(stem) => stem,
         None => return Err(~"Not a file.")
     };
