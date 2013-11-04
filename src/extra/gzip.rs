@@ -1,17 +1,46 @@
-/******************************************************************************
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0.  If a copy of the MPL was not distributed with this file,
- * You can obtain one at http://mozilla.org/MPL/2.0/.
- * 
- * Software distributed under the License is distributed on an "AS IS" basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for 
- * the specific language governing rights and limitations under the License.
- *
- * The Original Code is: gzip.rs
- * The Initial Developer of the Original Code is: William Wong (williamw520@gmail.com)
- * Portions created by William Wong are Copyright (C) 2013 William Wong, All Rights Reserved.
- *
- ******************************************************************************/
+// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+//
+
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0.  If a copy of the MPL was not distributed with this file,
+// You can obtain one at http://mozilla.org/MPL/2.0/.
+// 
+// Software distributed under the License is distributed on an "AS IS" basis,
+// WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for 
+// the specific language governing rights and limitations under the License.
+//
+// The Original Code is: gzip.rs
+// The Initial Developer of the Original Code is: William Wong (williamw520@gmail.com)
+// Portions created by William Wong are Copyright (C) 2013 William Wong, All Rights Reserved.
+
+
+/*!
+
+The gzip module supports reading and writing gzip data streams.
+There are two sets of API: the Reader/Writer API for operating data in batches,
+and the stream-style API for compressing and decompressing the whole streams.
+
+The GZipReader and GZipWriter are the API supporting reading and writing
+to the standard Reader and Writer traits.  These are caller-driven functions
+where the caller is responsible to call them in a loop to process all the batches
+of data.
+
+The GZip::compress_stream and GZip::decompress_stream are the stream-style API
+that take in a source reader and a destination writer to compress/decompress all
+the data from the source to the destination streams automatically.  It is
+callee-driven with an internal loop running until all data have been processed.
+It's more efficient with less buffer copying.
+
+*/
+
 
 use std::str;
 use std::num;
@@ -25,7 +54,7 @@ use std::rt::io::{Seek, SeekEnd};
 use super::deflate;
 use super::deflate::Deflator;
 use super::deflate::Inflator;
-use super::deflate::{DEFLATE_STATUS_OKAY, DEFLATE_STATUS_DONE, INFLATE_STATUS_DONE};
+use super::deflate::{DeflateStatusOkay, DeflateStatusDone, InflateStatusDone};
 
 
 /// The buf_size_factor for internal IO buffers.
@@ -63,25 +92,42 @@ pub fn calc_buf_size(buf_size_factor: uint) -> uint {
 /// GZip structure for tracking gzip compression and decompression
 pub struct GZip {
     // Header fields
-    id1:            u8,
-    id2:            u8,
-    compression:    u8,
-    flags:          u8,
-    mtime:          u32,
-    xflags:         u8,
-    os:             u8,
-    xfield_len:     Option<u16>,
-    xfield:         Option<~[u8]>,
-    filename:       Option<~str>,
-    comment:        Option<~str>,
-    header_crc:     Option<u16>,
+
+    /// File format ID
+    id1:                u8,
+    /// File format ID
+    id2:                u8,
+    /// Compression method
+    compression:        u8,
+    /// Header flags
+    flags:              u8,
+    /// Modified file time in Unix seconds
+    mtime:              u32,
+    /// Extra header flags
+    xflags:             u8,
+    /// OS signature
+    os:                 u8,
+    /// Extra field length
+    xfield_len:         Option<u16>,
+    /// Extra field
+    xfield:             Option<~[u8]>,
+    /// Original file name
+    filename:           Option<~str>,
+    /// Comment
+    comment:            Option<~str>,
+    /// Header CRC
+    header_crc:         Option<u16>,
 
     // End section
-    crc32:          u32,
-    original_size:  u32,
+
+    /// The CRC32 on the original data
+    crc32:              u32,
+    /// The original file length mod 2^32
+    original_size:      u32,
 
     // Misc
-    cmp_crc32:      u32,
+
+    priv cmp_crc32:     u32,
 }
 
 impl GZip {
@@ -89,6 +135,7 @@ impl GZip {
     /// Initialize a new GZip structure for decompression.  Read in the gzip header.
     /// Return the new GZip structure.
     pub fn decompress_init<R: Reader>(reader: &mut R) -> Result<GZip, ~str> {
+println("decompress_init");
         let mut gzip = GZip::new();
         match gzip.readHeader(reader).and_then( |_| gzip.readHeaderExtra(reader) ) {
             Ok(_)   => Ok(gzip),
@@ -110,6 +157,7 @@ impl GZip {
         }
     }
 
+    /// Read info on the gzip file without uncompressing the data.
     pub fn read_info(file_reader: &mut FileStream) -> Result<GZip, ~str> {
         let mut gzip = GZip::new();
         match gzip.readHeader(file_reader).and_then( |_| gzip.readHeaderExtra(file_reader) ) {
@@ -152,12 +200,12 @@ impl GZip {
     /// Runs until reading EOF from reader.  This is more efficient than GZipReader.
     /// Requires decompress_init() to be called first.
     /// buf_size_factor is used for internal IO buffers, with MIN_SIZE_FACTOR.  It is the power in 2.
-    pub fn decompress_pipe<R: Reader, W: Writer>(&mut self, reader: &mut R, writer: &mut W, buf_size_factor: uint) -> Result<~[u8], ~str> {
+    pub fn decompress_stream<R: Reader, W: Writer>(&mut self, reader: &mut R, writer: &mut W, buf_size_factor: uint) -> Result<~[u8], ~str> {
         let mut extra_buf = ~[];
         let mut end_buf = [0u8, ..END_LENGTH];
         let mut end_len = 0u;
         let mut inflator = Inflator::with_size_factor(buf_size_factor);
-        let status = inflator.decompress_pipe(
+        let status = inflator.decompress_stream(
             // upcall function to read input data for decompression
             |in_buf| {
                 let read_len = if reader.eof() {
@@ -193,7 +241,7 @@ impl GZip {
         inflator.free();
 
         match status {
-            INFLATE_STATUS_DONE => {
+            InflateStatusDone => {
                 match self.readEndSection(end_buf, end_len)
                     .and_then( |_| self.checkCrc() ) {
                     Ok(_)   => Ok(extra_buf),                       // Return the extra bytes beyond the end of gzip data.
@@ -279,10 +327,10 @@ impl GZip {
     /// compress_level is 0-9 for faster but lower compression ratio to slower but higher compression ratio.
     /// Control the internal IO buffer size with buf_size_factor.  See calc_buf_size() for the actual bytes computed.
     /// buf_size_factor is used for internal IO buffers, with MIN_SIZE_FACTOR.  It is the power in 2.
-    pub fn compress_pipe<R: Reader, W: Writer>(&mut self, reader: &mut R, writer: &mut W, compress_level: uint, buf_size_factor: uint) -> Result<uint, ~str> {
+    pub fn compress_stream<R: Reader, W: Writer>(&mut self, reader: &mut R, writer: &mut W, compress_level: uint, buf_size_factor: uint) -> Result<uint, ~str> {
         let mut deflator = Deflator::with_size_factor(buf_size_factor);
         deflator.init(compress_level, false, false);
-        let status = deflator.compress_pipe(
+        let status = deflator.compress_stream(
             // upcall function to read input data for compression
             |in_buf| {
                 if reader.eof() {
@@ -308,7 +356,7 @@ impl GZip {
         deflator.free();
     
         match status {
-            DEFLATE_STATUS_DONE => {
+            DeflateStatusDone => {
                 self.crc32 = self.cmp_crc32;
                 self.writeEndSection(writer);
                 Ok(0)
@@ -370,11 +418,17 @@ impl GZip {
 }
 
 
+/// A gzip reader stream to read decompressed data.
+/// Usage:
+///     let greader = GZipReader(input_reader);
+///     greader.read(plain_data_buf);
+/// GZipReader.read() returns None at EOF.
 pub struct GZipReader<R> {
-    gzip:           GZip,
-    inner_reader:   R,
-    inflator:       Inflator,
-    is_eof:         bool,
+    /// The GZip object for the gzip file informatioin 
+    gzip:               GZip,
+    priv inner_reader:  R,
+    priv inflator:      Inflator,
+    priv is_eof:        bool,
 }
 
 /// Decorator to access the inner reader
@@ -480,12 +534,19 @@ impl<R: Reader> Reader for GZipReader<R> {
 }
 
 
-
+/// A gzip writer stream to compress any data written to it.
+/// Usage:
+///     let gwriter = GZipWriter(output_writer);
+///     gwriter.write(plain_data_buf);
+///     ...
+///     gwriter.finalize();
+/// The output_writer will receive the compressed data.
 pub struct GZipWriter<W> {
-    gzip:           GZip,
-    inner_writer:   W,
-    deflator:       Deflator,
-    finalized:      bool,
+    /// The GZip object for the gzip file informatioin 
+    gzip:               GZip,
+    priv inner_writer:  W,
+    priv deflator:      Deflator,
+    priv finalized:     bool,
 }
 
 impl<W: Writer> GZipWriter<W> {
@@ -554,9 +615,9 @@ impl<W: Writer> GZipWriter<W> {
                 }
             });
         match status {
-            DEFLATE_STATUS_OKAY => {
+            DeflateStatusOkay => {
             },
-            DEFLATE_STATUS_DONE => {
+            DeflateStatusDone => {
                 self.gzip.crc32 = self.gzip.cmp_crc32;
                 self.gzip.writeEndSection(&mut self.inner_writer);
                 self.finalized = true;
@@ -687,7 +748,7 @@ fn make_crc_table() -> [u32, ..256] {
     table
 }
 
-// Run this to pre-generate the CRC table to be included in source code.
+/// Run this to pre-generate the CRC table to be included in source code.
 pub fn generate_crc_table() {
     let table = make_crc_table();
     let mut output = ~"static crc_table : [u32, ..256] = [";
@@ -745,7 +806,6 @@ mod tests {
     use std::rt::io::mem::MemReader;
     use std::rand;
     use std::rand::Rng;
-//    use super::*;
 
     #[test]
     fn test_generate_crc_table() {

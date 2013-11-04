@@ -1,39 +1,47 @@
-/******************************************************************************
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0.  If a copy of the MPL was not distributed with this file,
- * You can obtain one at http://mozilla.org/MPL/2.0/.
- * 
- * Software distributed under the License is distributed on an "AS IS" basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for 
- * the specific language governing rights and limitations under the License.
- *
- * The Original Code is: rzip.rs
- * The Initial Developer of the Original Code is: William Wong (williamw520@gmail.com)
- * Portions created by William Wong are Copyright (C) 2013 William Wong, All Rights Reserved.
- *
- ******************************************************************************/
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0.  If a copy of the MPL was not distributed with this file,
+// You can obtain one at http://mozilla.org/MPL/2.0/.
+// 
+// Software distributed under the License is distributed on an "AS IS" basis,
+// WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for 
+// the specific language governing rights and limitations under the License.
+//
+// The Original Code is: rgzip.rs
+// The Initial Developer of the Original Code is: William Wong (williamw520@gmail.com)
+// Portions created by William Wong are Copyright (C) 2013 William Wong, All Rights Reserved.
 
 
 extern mod extra;
+
+
+// The gzip and deflate code exist in two places: in the original RustyZip project library and in the Rust's 'extra' runtime library.
+// Uncomment either one of the following sections to link to one or the other library.
+
+// Uncomment these to use the local modules in the local rustyzip.lib.
 extern mod rustyzip;
+use rustyzip::gzip;
+use rustyzip::gzip::{GZip, GZipReader, GZipWriter};
+
+// Uncomment these to use the modules in the system's libextra.
+// use extra::gzip;
+// use extra::gzip::{GZip, GZipReader, GZipWriter};
+
+
 
 use std::os;
 use std::num;
 use std::vec;
 use std::result::{Result, Ok, Err};
-use extra::getopts::{optflag, optopt, getopts};
 use std::to_str::ToStr;
 use std::path::Path;
 use std::rt::io::file;
 use std::rt::io::file::FileStream;
 use std::rt::io::{Reader, Writer, Open, Create, Read, Write, io_error};
-
-use rustyzip::rustyzip_lib::gzip;
-use rustyzip::rustyzip_lib::gzip::{GZip, GZipReader, GZipWriter};
+use extra::getopts::{optflag, optopt, getopts};
 
 
 
-static VERSION_STR : &'static str = "0.8";
+static VERSION_STR : &'static str = "0.9";
 
 
 enum Cmd {
@@ -49,7 +57,7 @@ struct Options {
     quiet:          bool,
     verbose:        bool,
     compress_level: uint,
-    use_pipe:       bool,
+    use_stream:     bool,
     size_factor:    uint,
     files:          ~[~str],
 }
@@ -67,7 +75,7 @@ impl Options {
             quiet: false,
             verbose: false,
             compress_level: gzip::DEFAULT_COMPRESS_LEVEL,
-            use_pipe: true,
+            use_stream: true,
             size_factor: gzip::DEFAULT_SIZE_FACTOR,
             files: ~[],
         };
@@ -102,7 +110,7 @@ impl Options {
                      optflag("7"),
                      optflag("8"),
                      optflag("9"),
-                     optflag("Pipe"),
+                     optflag("Stream"),
                      optopt("b"),
                      optopt("bufsize"),
                      
@@ -125,7 +133,7 @@ impl Options {
                     let slevel = format!("{:u}", level);
                     options.compress_level = if matches.opt_present(slevel) { level } else { options.compress_level };
                 }
-                options.use_pipe = !matches.opt_present("Pipe");
+                options.use_stream = !matches.opt_present("Stream");
                 let mut size_factor = if matches.opt_present("bufsize") { maybe_to_num(matches.opt_str("bufsize"), gzip::DEFAULT_SIZE_FACTOR) } else { gzip::DEFAULT_SIZE_FACTOR };
                 size_factor = if matches.opt_present("b")               { maybe_to_num(matches.opt_str("b"), size_factor) } else { size_factor };
                 options.size_factor = num::max(gzip::MIN_SIZE_FACTOR, size_factor);
@@ -199,7 +207,7 @@ fn open_compressed_writer(options: &Options, file: &str) -> Result<FileStream, ~
     }
 }
 
-fn compress_pipe_loop<R: Reader, W: Writer>(mut stream_reader: R, mut stream_writer: W, filepath: &Path, options: &Options) -> ~str {
+fn compress_stream_loop<R: Reader, W: Writer>(mut stream_reader: R, mut stream_writer: W, filepath: &Path, options: &Options) -> ~str {
     let file_name = if options.no_name { ~"" } else { get_file_name(filepath) };
     let mut mtime = 0u32;
     let mut file_size = 0u32;
@@ -215,7 +223,7 @@ fn compress_pipe_loop<R: Reader, W: Writer>(mut stream_reader: R, mut stream_wri
     match GZip::compress_init(&mut stream_writer, file_name, mtime, file_size) {
         Ok(gzip) => {
             let mut gzip = gzip;
-            match gzip.compress_pipe(&mut stream_reader, &mut stream_writer, options.compress_level, options.size_factor) {
+            match gzip.compress_stream(&mut stream_reader, &mut stream_writer, options.compress_level, options.size_factor) {
                 Ok(_)   => ~"",
                 Err(s)  => s
             }
@@ -263,7 +271,7 @@ fn compress_file(options: &Options, file: &str) -> ~[~str] {
     let mut results : ~[~str] = ~[];
 
     let filepath = Path::new(file);
-    if filepath.extension_str().unwrap_or("").to_ascii().to_lower().to_str_ascii().equals(&~".gz") {
+    if filepath.extension_str().unwrap_or("").to_ascii().to_lower().to_str_ascii().equals(&~"gz") {
         results.push(format!("File {:s} already has the .gz suffix -- unchanged", file));
         return results;
     }
@@ -275,8 +283,8 @@ fn compress_file(options: &Options, file: &str) -> ~[~str] {
             Some(stream_reader) => {
                 match open_compressed_writer(options, file) {
                     Ok(stream_writer) => {
-                        let result = if options.use_pipe {
-                            compress_pipe_loop(stream_reader, stream_writer, &filepath, options)
+                        let result = if options.use_stream {
+                            compress_stream_loop(stream_reader, stream_writer, &filepath, options)
                         } else {
                             compress_write_loop(stream_reader, stream_writer, &filepath, options)
                         };
@@ -308,13 +316,16 @@ fn open_decompressed_writer(options: &Options, filepath: &Path) -> Result<FileSt
     };
 
     let out_filepath = filepath.with_filename(filestem);
+    if out_filepath.exists() && !options.force {
+        return Err(~"File already exists.  Use -f to overwrite it.");
+    }
     match file::open(&out_filepath, Create, Write) {
         Some(writer_stream) => Ok(writer_stream),
         None => Err(~"Failed to open file for write.")
     }
 }
 
-fn decompress_pipe_loop<R: Reader>(mut stream_reader: R, out_file: &str, options: &Options) -> ~str {
+fn decompress_stream_loop<R: Reader>(mut stream_reader: R, out_file: &str, options: &Options) -> ~str {
     match GZip::decompress_init(&mut stream_reader) {
         Ok(gzip) => {
             let decomp_filename = if options.name { gzip.filename.clone().unwrap_or(out_file.to_owned()) } else { out_file.to_owned() };
@@ -323,7 +334,7 @@ fn decompress_pipe_loop<R: Reader>(mut stream_reader: R, out_file: &str, options
                 Ok(stream_writer) => {
                     let mut stream_writer = stream_writer;
                     let mut gzip = gzip;
-                    match gzip.decompress_pipe(&mut stream_reader, &mut stream_writer, options.size_factor) {
+                    match gzip.decompress_stream(&mut stream_reader, &mut stream_writer, options.size_factor) {
                         Ok(_)   => ~"",
                         Err(s)  => s
                     }
@@ -387,8 +398,8 @@ fn decompress_file(options: &Options, file: &str) -> ~[~str] {
     }).inside {
         match file::open(&filepath, Open, Read) {
             Some(stream_reader) => {
-                let result = if options.use_pipe {
-                    decompress_pipe_loop(stream_reader, file, options)
+                let result = if options.use_stream {
+                    decompress_stream_loop(stream_reader, file, options)
                 } else {
                     decompress_read_loop(stream_reader, file, options)
                 };

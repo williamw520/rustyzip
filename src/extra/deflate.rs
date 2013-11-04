@@ -1,18 +1,50 @@
-/******************************************************************************
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0.  If a copy of the MPL was not distributed with this file,
- * You can obtain one at http://mozilla.org/MPL/2.0/.
- * 
- * Software distributed under the License is distributed on an "AS IS" basis, 
- * WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for 
- * the specific language governing rights and limitations under the License.
- *
- * The Original Code is: deflate.rs
- * The Initial Developer of the Original Code is: William Wong (williamw520@gmail.com)
- * Portions created by William Wong are Copyright (C) 2013 William Wong, All Rights Reserved.
- *
- ******************************************************************************/
+// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// file at the top-level directory of this distribution and at
+// http://rust-lang.org/COPYRIGHT.
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+//
 
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0.  If a copy of the MPL was not distributed with this file,
+// You can obtain one at http://mozilla.org/MPL/2.0/.
+// 
+// Software distributed under the License is distributed on an "AS IS" basis,
+// WITHOUT WARRANTY OF ANY KIND, either express or implied. See the License for 
+// the specific language governing rights and limitations under the License.
+//
+// The Original Code is: deflate.rs
+// The Initial Developer of the Original Code is: William Wong (williamw520@gmail.com)
+// Portions created by William Wong are Copyright (C) 2013 William Wong, All Rights Reserved.
+
+
+
+/*!
+
+The deflate module provides compression and decompression support via the
+DEFLATE algorithm.  Its wraps the miniz.c as basis for the implementation
+for DEFLATE and provides an easy to use API in Rust.
+
+There are two sets of API: cursor-style API for operating data in batches,
+and the stream-style API for compressing and decompressing the whole streams.
+
+The compress_read and decompress_read are the API supporting reading and writing
+batches of data .  These are caller-driven functions where the caller is
+responsible to call them in a loop to process all the batches of data.
+
+The compress_stream and decompress_stream are the stream-style API that take
+in a source read_fn and a destination write_fn to compress/decompress all
+the data from the source to the destination streams automatically.  It is
+callee-driven with an internal loop running until all data have been processed.
+It's more efficient with less buffer copying.
+
+See gzip.rs for sample usage.
+
+*/
 
 use std::rt::io::{Reader, Writer};
 use std::{vec, num, ptr};
@@ -20,50 +52,69 @@ use std::libc::{c_void, size_t, c_int, c_uint};
 
 
 
-// DEFLATE function return status
-pub enum Deflate_Status {
-    DEFLATE_STATUS_BAD_PARAM = -2,
-    DEFLATE_STATUS_PUT_BUF_FAILED = -1,
-    DEFLATE_STATUS_OKAY = 0,
-    DEFLATE_STATUS_DONE = 1,
-    DEFLATE_STATUS_ABORT = -9998,
-    DEFLATE_STATUS_UNKNOWN = -9999,
+/// DEFLATE function return status
+pub enum DeflateStatus {
+    /// Invalid parameters passed into API. e.g. buffer too small
+    DeflateStatusBadParam = -2,
+    /// The callback write fn has failed
+    DeflateStatusPutBufFailed = -1,
+    /// Intermediate compression call succeeded but expecting more data to compress.
+    DeflateStatusOkay = 0,
+    /// All data have been compressed and finalized.
+    DeflateStatusDone = 1,
+    /// The callback write fn wants to abort the compression operation.  Stream-loop will be broken and returned.
+    DeflateStatusAbort = -9998,
+    /// Unknown status from low layer
+    DeflateStatusUnknown = -9999,
 }
 
-impl Deflate_Status {
-    fn from_status(status: c_int) -> Deflate_Status {
+impl DeflateStatus {
+    fn from_status(status: c_int) -> DeflateStatus {
         match status {
-            -2 => DEFLATE_STATUS_BAD_PARAM,
-            -1 => DEFLATE_STATUS_PUT_BUF_FAILED,
-            0  => DEFLATE_STATUS_OKAY,
-            1  => DEFLATE_STATUS_DONE,
-            _  => DEFLATE_STATUS_UNKNOWN
+            -2 => DeflateStatusBadParam,
+            -1 => DeflateStatusPutBufFailed,
+            0  => DeflateStatusOkay,
+            1  => DeflateStatusDone,
+            _  => DeflateStatusUnknown
         }
     }
 }
 
-// INFLATE function return status
-pub enum Inflate_Status {
-    INFLATE_STATUS_BAD_PARAM = -3,
-    INFLATE_STATUS_ADLER32_MISMATCH = -2,
-    INFLATE_STATUS_FAILED = -1,
-    INFLATE_STATUS_DONE = 0,
-    INFLATE_STATUS_NEEDS_MORE_INPUT = 1,
-    INFLATE_STATUS_HAS_MORE_OUTPUT = 2,
-    INFLATE_STATUS_ABORT = -9998,
-    INFLATE_STATUS_UNKNOWN = -9999,
+/// INFLATE function return status
+pub enum InflateStatus {
+    /// The inflator needs 1 or more input bytes to make forward progress, but the caller is indicating that no more are available. The compressed data is probably corrupted.
+    InflateStatusFailedCannotMakeProgress = -4,
+    /// Invalid parameters passed into API. e.g. buffer too small.
+    InflateStatusBadParam = -3,
+    /// The inflator is finished but the ADLER32 check of the uncompressed data didn't match.  Calling it again it'll return InflateStatusDone.
+    StatusAdler32Mismatch = -2,
+    /// The inflator has failed (corrupted input, bad buffer, etc.).
+    InflateStatusFailed = -1,
+    /// The inflator has returned every byte of uncompressed data that it can, has consumed every byte that it needed, has successfully reached the end of the deflate stream.
+    InflateStatusDone = 0,
+    /// Need more input data before the inflator can make any more progress.  Can supply more data or set the final_input flag in call.
+    /// If the source data was corrupted, it's possible but unlikely for the inflator to keep on demanding input to proceed.
+    InflateStatusNeedsMoreInput = 1,
+    /// The output buffer is full, and the inflator has more bytes of uncompressed data to process but it cannot write to the output buffer.
+    /// Uncompressing is paused until room are made in the output buffer.
+    InflateStatusHasMoreOutput = 2,
+    /// The write_fn has returned a flag to abort the uncompression process.
+    InflateStatusAbort = -9998,
+    /// Unknown status from low layer.
+    InflateStatusUnknown = -9999,
 }
 
-impl Inflate_Status {
-    fn from_status(status: c_int) -> Inflate_Status {
+impl InflateStatus {
+    fn from_status(status: c_int) -> InflateStatus {
         match status {
-            -3 => INFLATE_STATUS_BAD_PARAM,
-            -2 => INFLATE_STATUS_ADLER32_MISMATCH,
-            -1 => INFLATE_STATUS_FAILED,
-            0  => INFLATE_STATUS_DONE,
-            1  => INFLATE_STATUS_NEEDS_MORE_INPUT,
-            2  => INFLATE_STATUS_HAS_MORE_OUTPUT,
-            _  => INFLATE_STATUS_UNKNOWN
+            -4 => InflateStatusFailedCannotMakeProgress,
+            -3 => InflateStatusBadParam,
+            -2 => StatusAdler32Mismatch,
+            -1 => InflateStatusFailed,
+            0  => InflateStatusDone,
+            1  => InflateStatusNeedsMoreInput,
+            2  => InflateStatusHasMoreOutput,
+            _  => InflateStatusUnknown
         }
     }
 }
@@ -135,14 +186,14 @@ mod rustrt {
 }
 
 
-
+/// Calculate the buffer size in bytes given the buf_size_factor.  It's in 2^buf_size_factor X 1K.
 pub fn calc_buf_size(buf_size_factor: uint) -> uint {
     return 1024 * num::pow_with_uint(2, buf_size_factor);
 }
 
 
 /// Compression data structure
-pub struct Deflator {
+struct Deflator {
     tdefl_compressor: *c_void,
     in_buf: ~[u8],
     out_buf: ~[u8],
@@ -159,6 +210,8 @@ impl Deflator {
         Deflator::with_size_factor(MIN_SIZE_FACTOR)
     }
 
+    /// Create the Deflator structure and allocate the underlying tdefl_compressor structure.  
+    /// Set the IO buffers with buf_size_factor.  The buf_size_factor is a power of 2 of K: 2^buf_size_factor X 1K.
     pub fn with_size_factor(buf_size_factor: uint) -> Deflator {
         #[fixed_stack_segment];
         #[inline(never)];
@@ -193,7 +246,7 @@ impl Deflator {
     /// compress_level is 0 to 10, where 0 is the fastest with decompressed raw data and 9 is the slowest with best compression.
     /// add_zlib_header set to true to add the ZLib-format header in front of and an ADLER32 CRC at the end of the deflated data.
     /// add_crc32 set to true to add an ADLER32 CRC at the end of the deflated data regardless how add_zlib is set.
-    pub fn init(&self, compress_level: uint, add_zlib_header: bool, add_crc32: bool) -> Deflate_Status {
+    pub fn init(&self, compress_level: uint, add_zlib_header: bool, add_crc32: bool) -> DeflateStatus {
         #[fixed_stack_segment];
         #[inline(never)];
 
@@ -207,15 +260,15 @@ impl Deflator {
 
         unsafe {
             let status = rustrt::tdefl_init(self.tdefl_compressor, ptr::null(), ptr::null(), compress_flags as c_int);
-            return Deflate_Status::from_status(status);
+            return DeflateStatus::from_status(status);
         }
     }
 
-    /// Demo usage of compress_pipe().
+    /// Demo usage of compress_stream().
     /// Compress all data read from the reader and write the compressed data to the writer.
     /// Loop and run until reading EOF from reader.  Will wait on read or wait on write if they are blocked.
-    pub fn compress_pipe_rw<R: Reader, W: Writer>(&mut self, in_reader: &mut R, out_writer: &mut W) -> Deflate_Status {
-        self.compress_pipe(
+    pub fn compress_stream_rw<R: Reader, W: Writer>(&mut self, in_reader: &mut R, out_writer: &mut W) -> DeflateStatus {
+        self.compress_stream(
             // upcall function to read data for compression
             |in_buf| {
                 if in_reader.eof() {
@@ -246,9 +299,9 @@ impl Deflator {
     /// It returns the number of bytes read.  Returns 0 for EOF or no more data.
     /// The callback write_fn function takes an out_buf buffer containing one batch of compressed data at a time
     /// and is_eof is set for the last call to write data.  Write_fn can return an abort flag to abort the compression.
-    pub fn compress_pipe(&mut self, 
+    pub fn compress_stream(&mut self, 
                          read_fn:  &fn(in_buf: &mut [u8])->uint, 
-                         write_fn: &fn(out_buf: &[u8], is_eof: bool)->bool) -> Deflate_Status {
+                         write_fn: &fn(out_buf: &[u8], is_eof: bool)->bool) -> DeflateStatus {
 
         let out_buf_total = self.out_buf.len();
 
@@ -268,19 +321,19 @@ impl Deflator {
             self.out_offset += out_bytes;                               // advance offset by the number of bytes written.
 
             match status {
-                DEFLATE_STATUS_OKAY => {
+                DeflateStatusOkay => {
                     // If out_buf is full, write its content out.  Reset it.
                     if self.out_offset == out_buf_total {
                         if write_fn(self.out_buf, false) {
-                            return DEFLATE_STATUS_ABORT;
+                            return DeflateStatusAbort;
                         }
                         self.out_offset = 0;
                     }
                 },
-                DEFLATE_STATUS_DONE => {
+                DeflateStatusDone => {
                     // Write the remaining content in out_buf out.
                     write_fn(self.out_buf.slice(0, self.out_offset), true);
-                    return DEFLATE_STATUS_DONE;
+                    return DeflateStatusDone;
                 },
                 _ => return status  // Return error
             }
@@ -289,14 +342,14 @@ impl Deflator {
 
     /// Compress one batch of input data at a time.  Caller drives the write loop.
     /// Caller needs to call this function in a loop until all data are written out.
-    //  This approach has more more buffer copyings than the pipe approach. 
+    //  This approach has more more buffer copyings than the stream approach. 
     /// Input to compress is supplied in input_buf, which will be fully written out before returning.
     /// The compressed data are returned to caller via the write_fn callback.
     /// Th final_write flag is set for the last batch of data to compress, to finalize the compressed data.
     pub fn compress_write(&mut self,
                           input_buf: &[u8],
                           final_write: bool,
-                          write_fn: &fn(out_buf: &[u8], is_eof: bool)) -> Deflate_Status {
+                          write_fn: &fn(out_buf: &[u8], is_eof: bool)) -> DeflateStatus {
 
         let out_buf_total = self.out_buf.len();
         let input_total = input_buf.len();
@@ -323,7 +376,7 @@ impl Deflator {
             self.out_offset += out_bytes;                               // advance offset by the number of bytes written;
 
             match status {
-                DEFLATE_STATUS_OKAY => {
+                DeflateStatusOkay => {
                     // If out_buf is full, write its content out.  Reset it.
                     if self.out_offset == out_buf_total {
                         write_fn(self.out_buf, false);
@@ -331,20 +384,20 @@ impl Deflator {
                         self.out_offset = 0;
                     }
                 },
-                DEFLATE_STATUS_DONE => {
+                DeflateStatusDone => {
                     // Write the remaining content in out_buf out.
                     write_fn(self.out_buf.slice(0, self.out_offset), true);
                     self.write_total += self.out_offset;
-                    return DEFLATE_STATUS_DONE;
+                    return DeflateStatusDone;
                 },
                 _ => return status  // Return error
             }
 
             // Has compressed all input_buf for the current non-final write.  Return to caller.
             if !final_write && input_remaining == 0 {
-                return DEFLATE_STATUS_OKAY;
+                return DeflateStatusOkay;
             }
-            // Important: for the final_write, need to loop to flush all remaining data in in_buf and out_buf until DEFLATE_STATUS_DONE.
+            // Important: for the final_write, need to loop to flush all remaining data in in_buf and out_buf until DeflateStatusDone.
         }
     }
 
@@ -362,7 +415,7 @@ impl Deflator {
     pub fn compress_buf(&self, 
                         in_buf:  &[u8], in_offset:  uint, in_bytes:  &mut uint, 
                         out_buf: &[u8], out_offset: uint, out_bytes: &mut uint, 
-                        final_input: bool) -> Deflate_Status {
+                        final_input: bool) -> DeflateStatus {
         #[fixed_stack_segment];
         #[inline(never)];
 
@@ -387,7 +440,7 @@ impl Deflator {
 
         *in_bytes = in_bytes_sz as uint;
         *out_bytes = out_bytes_sz as uint;
-        return Deflate_Status::from_status(status);
+        return DeflateStatus::from_status(status);
     }
 
 }
@@ -401,7 +454,7 @@ impl Drop for Deflator {
 
 
 /// Decompression data structure
-pub struct Inflator {
+struct Inflator {
     tinfl_decompressor: *c_void,
     in_buf: ~[u8],
     out_buf: ~[u8],
@@ -420,6 +473,8 @@ impl Inflator {
         Inflator::with_size_factor(MIN_SIZE_FACTOR)
     }
 
+    /// Create the Inflator structure and allocate the underlying tdefl_compressor structure.
+    /// Set the IO buffers with buf_size_factor.  The buf_size_factor is a power of 2 of K: 2^buf_size_factor X 1K.
     pub fn with_size_factor(buf_size_factor: uint) -> Inflator {
         #[fixed_stack_segment];
         #[inline(never)];
@@ -451,13 +506,13 @@ impl Inflator {
         }
     }
 
-    /// Demo usage of decompress_pipe().
-    /// Read the input data from reader, decompress them, and output them to writer in a pipe.
+    /// Demo usage of decompress_stream().
+    /// Read the input data from reader, decompress them, and output them to writer in a batch.
     /// Decompress all data read from the reader and write the decompressed data to the writer.
     /// Any extra input data from the reader beyond the compressed data are discarded.
     /// Loop until reading EOF from reader.  Will wait on read or wait on write if they are blocked.
-    pub fn decompress_pipe_rw<R: Reader, W: Writer>(&mut self, in_reader: &mut R, out_writer: &mut W) -> Inflate_Status {
-        self.decompress_pipe(
+    pub fn decompress_stream_rw<R: Reader, W: Writer>(&mut self, in_reader: &mut R, out_writer: &mut W) -> InflateStatus {
+        self.decompress_stream(
             // upcall function to read input data for decompression
             |in_buf| {
                 if in_reader.eof() {
@@ -498,10 +553,10 @@ impl Inflator {
     /// It returns the number of bytes read.  Returns 0 for EOF or no more data.
     /// The callback write_fn takes an out_buf buffer containing one batch of decompressed data at a time
     /// and is_eof is set for the last call to write data.  Write_fn can return an abort flag to abort the decompression.
-    pub fn decompress_pipe(&mut self, 
+    pub fn decompress_stream(&mut self, 
                            read_fn:  &fn(in_buf: &mut [u8])->uint, 
                            write_fn: &fn(out_buf: &[u8], is_eof: bool)->bool,
-                           rest_fn:  &fn(rest_buf: &[u8]) ) -> Inflate_Status {
+                           rest_fn:  &fn(rest_buf: &[u8]) ) -> InflateStatus {
 
         let out_buf_total = self.out_buf.len();
 
@@ -521,18 +576,18 @@ impl Inflator {
             self.out_offset += out_bytes;
 
             match status {
-                INFLATE_STATUS_NEEDS_MORE_INPUT | INFLATE_STATUS_HAS_MORE_OUTPUT => {
+                InflateStatusNeedsMoreInput | InflateStatusHasMoreOutput => {
                     // The internal out_buf is full.  Time to writ it out.
                     // Important to process until out_buf is full because the LZ dictionary at the beginning of the buffer is being re-used until buf is full.
                     if self.out_offset == out_buf_total {
                         self.write_total += self.out_offset;
                         if write_fn(self.out_buf, false) {
-                            return INFLATE_STATUS_ABORT;
+                            return InflateStatusAbort;
                         }
                         self.out_offset = 0;
                     }
                 },
-                INFLATE_STATUS_DONE => {
+                InflateStatusDone => {
                     self.write_total += self.out_offset;
                     write_fn(self.out_buf.slice(0, self.out_offset), true);
                     rest_fn(self.in_buf.slice(self.in_offset, self.in_buf_total));
@@ -546,13 +601,13 @@ impl Inflator {
     /// Decompress one batch of input data at a time.  The decompressed data are returned in output_buf.
     /// The length of the output data is returned in Ok(output_len).
     /// Caller calls this function in a loop to read all the decompressed data until output_len is 0.
-    //  This approach has more buffer copyings than the pipe approach. 
+    //  This approach has more buffer copyings than the stream approach. 
     /// The input data to decompress are supplied by the read_fn callback function from caller.
     /// The decompressed data are returned to caller one batch at a time.
     /// After reaching the end of output, the remaining unprocessed input data can be retrieved with get_rest().
     pub fn decompress_read(&mut self, 
                            read_fn:  &fn(in_buf: &mut [u8])->uint, 
-                           output_buf: &mut [u8]) -> Result<uint, Inflate_Status> {
+                           output_buf: &mut [u8]) -> Result<uint, InflateStatus> {
 
         let out_buf_total = self.out_buf.len();
 
@@ -589,7 +644,7 @@ impl Inflator {
                 self.out_offset += out_bytes;
 
                 match status {
-                    INFLATE_STATUS_NEEDS_MORE_INPUT | INFLATE_STATUS_HAS_MORE_OUTPUT => {
+                    InflateStatusNeedsMoreInput | InflateStatusHasMoreOutput => {
                         // The internal out_buf is full; break out to drain output.
                         // Important to process until out_buf is full because the LZ dictionary at the beginning of the buffer is being re-used until buf is full.
                         if self.out_offset == out_buf_total {
@@ -597,7 +652,7 @@ impl Inflator {
                         }
                         // Otherwise loop back read more input
                     },
-                    INFLATE_STATUS_DONE => {
+                    InflateStatusDone => {
                         // Break out to drain output.
                         self.decomp_done = true;
                         break;
@@ -608,10 +663,12 @@ impl Inflator {
         }
     }
 
+    /// Get the buffer length of the rest_buf, the extra data left over from decompression.
     pub fn get_rest_len(&self) -> uint {
         return self.in_buf_total - self.in_offset;
     }
 
+    /// Get the rest_buf, the extra data left over from decompression.
     pub fn get_rest(&self, rest_buf: &mut [u8]) -> uint {
         let copy_len = num::min(rest_buf.len(), self.in_buf_total - self.in_offset);
         vec::bytes::copy_memory(rest_buf, self.in_buf.slice(self.in_offset, self.in_buf_total), copy_len);
@@ -635,7 +692,7 @@ impl Inflator {
     /// typically the buffer is big enough to contain all decompressed data.
     pub fn decompress_buf(&self,
                           in_buf:  &[u8], in_offset:  uint, in_bytes:  &mut uint, final_input: bool, 
-                          out_buf: &[u8], out_offset: uint, out_bytes: &mut uint, reuse_out_buf: bool) -> Inflate_Status {
+                          out_buf: &[u8], out_offset: uint, out_bytes: &mut uint, reuse_out_buf: bool) -> InflateStatus {
         #[fixed_stack_segment];
         #[inline(never)];
 
@@ -666,7 +723,7 @@ impl Inflator {
 
         *in_bytes = in_bytes_sz as uint;
         *out_bytes = out_bytes_sz as uint;
-        return Inflate_Status::from_status(status);
+        return InflateStatus::from_status(status);
     }
 
 }
@@ -714,7 +771,7 @@ mod tests {
         let deflator = Deflator::new();
 
         match deflator.init(6, false, false) {
-            DEFLATE_STATUS_OKAY => (),
+            DeflateStatusOkay => (),
             _ =>  fail!()
         }
     }
@@ -724,12 +781,12 @@ mod tests {
         let deflator = Deflator::new();
 
         match deflator.init(6, false, false) {
-            DEFLATE_STATUS_OKAY => (),
+            DeflateStatusOkay => (),
             _ =>  fail!()
         }
 
         match deflator.init(6, false, false) {
-            DEFLATE_STATUS_OKAY => (),
+            DeflateStatusOkay => (),
             _ =>  fail!()
         }
 
@@ -745,8 +802,8 @@ mod tests {
         let out_buf = vec::from_elem(32, 0u8);
         let mut out_bytes = out_buf.len();
         match deflator.compress_buf(in_buf, 0, &mut in_bytes, out_buf, 0, &mut out_bytes, true) {
-            DEFLATE_STATUS_OKAY => (),
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusOkay => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         deflator.free();
@@ -767,8 +824,8 @@ mod tests {
         let mut out_buf = vec::from_elem(32, 0u8);
         let mut out_bytes = out_buf.len();
         match deflator.compress_buf(in_buf, 0, &mut in_bytes, out_buf, 0, &mut out_bytes, true) {
-            DEFLATE_STATUS_OKAY => (),
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusOkay => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         assert!(( in_bytes == in_buf.len() ));
@@ -785,7 +842,7 @@ mod tests {
         let mut out_offset = 0;
         out_bytes  = out_buf.len() - out_offset;
         match deflator.compress_buf(in_buf, 0, &mut in_bytes, out_buf, out_offset, &mut out_bytes, false) {
-            DEFLATE_STATUS_OKAY => (),
+            DeflateStatusOkay => (),
             _ => fail!()
         }
         out_offset += out_bytes;
@@ -795,7 +852,7 @@ mod tests {
         in_buf  = bytes!("ABCDEFGHABCDEFGH");
         in_bytes = in_buf.len();
         match deflator.compress_buf(in_buf, 0, &mut in_bytes, out_buf, out_offset, &mut out_bytes, true) {
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
 
@@ -821,8 +878,8 @@ mod tests {
         let mut out_buf = vec::from_elem(32, 0u8);
         let mut out_bytes = out_buf.len();
         match deflator.compress_buf(in_buf, 0, &mut in_bytes, out_buf, 0, &mut out_bytes, true) {
-            DEFLATE_STATUS_OKAY => (),
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusOkay => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         assert!(( in_bytes == in_buf.len() ));
@@ -840,7 +897,7 @@ mod tests {
         let mut out_offset = 0;
         out_bytes  = out_buf.len() - out_offset;
         match deflator.compress_buf(in_buf, in_offset, &mut in_bytes, out_buf, out_offset, &mut out_bytes, false) {
-            DEFLATE_STATUS_OKAY => (),
+            DeflateStatusOkay => (),
             _ => fail!()
         }
         in_offset += in_bytes;
@@ -850,7 +907,7 @@ mod tests {
 
         // Second call with updated in_offset and in_bytes
         match deflator.compress_buf(in_buf, in_offset, &mut in_bytes, out_buf, out_offset, &mut out_bytes, true) {
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
 
@@ -876,8 +933,8 @@ mod tests {
         let mut out_buf = vec::from_elem(32, 0u8);
         let mut out_bytes = out_buf.len();
         match deflator.compress_buf(in_buf, 0, &mut in_bytes, out_buf, 0, &mut out_bytes, true) {
-            DEFLATE_STATUS_OKAY => (),
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusOkay => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         assert!(( in_bytes == in_buf.len() ));
@@ -895,7 +952,7 @@ mod tests {
         let mut out_offset = 0;
         out_bytes  = out_buf.len() - out_offset;
         match deflator.compress_buf(in_buf, in_offset, &mut in_bytes, out_buf, out_offset, &mut out_bytes, false) {
-            DEFLATE_STATUS_OKAY => (),
+            DeflateStatusOkay => (),
             _ => fail!()
         }
         in_offset += in_bytes;
@@ -905,7 +962,7 @@ mod tests {
 
         // Second call with updated in_offset and in_bytes
         match deflator.compress_buf(in_buf, in_offset, &mut in_bytes, out_buf, out_offset, &mut out_bytes, false) {
-            DEFLATE_STATUS_OKAY => (),
+            DeflateStatusOkay => (),
             _ => fail!()
         }
         in_offset += in_bytes;
@@ -915,7 +972,7 @@ mod tests {
 
         // Third call with empty input data but with the final_input set to true
         match deflator.compress_buf(in_buf, in_offset, &mut in_bytes, out_buf, out_offset, &mut out_bytes, true) {
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
 
@@ -942,7 +999,7 @@ mod tests {
         // println(fmt!("1. in_bytes: %?", in_bytes));
         let status = deflator.compress_buf(in_buf, 0, &mut in_bytes, out_buf, 0, &mut out_bytes, true);
         match status {
-            DEFLATE_STATUS_OKAY => (),
+            DeflateStatusOkay => (),
             _ => fail!()
         }
         deflator.free();
@@ -972,16 +1029,16 @@ mod tests {
         let mut out_bytes = out_buf.len();
         let mut status = deflator.compress_buf(in_buf, 0, &mut in_bytes, out_buf, 0, &mut out_bytes, true);
         match status {
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
 
         let mut mreader = MemReader::new(in_buf);
         let mut mwriter = MemWriter::new();
         deflator.init(6, false, false);
-        status = deflator.compress_pipe_rw(&mut mreader, &mut mwriter);
+        status = deflator.compress_stream_rw(&mut mreader, &mut mwriter);
         match status {
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
 
@@ -1023,8 +1080,8 @@ mod tests {
         let comp_buf = vec::from_elem(64, 0u8);
         let mut comp_bytes = comp_buf.len();
         match comp.compress_buf(in_buf, 0, &mut in_bytes, comp_buf, 0, &mut comp_bytes, true) {
-            DEFLATE_STATUS_OKAY => (),
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusOkay => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         comp.free();
@@ -1038,7 +1095,7 @@ mod tests {
         let decomp_buf = vec::from_elem(MIN_DECOMPRESS_BUF_SIZE, 0u8);
         let mut decomp_bytes = decomp_buf.len();
         match inflator.decompress_buf(comp_buf, 0, &mut de_in_bytes, true, decomp_buf, 0, &mut decomp_bytes, false) {
-            INFLATE_STATUS_DONE => (),
+            InflateStatusDone => (),
             _ => fail!()
         }
         inflator.free();
@@ -1061,8 +1118,8 @@ mod tests {
         let comp_buf = vec::from_elem(64, 0u8);
         let mut comp_bytes = comp_buf.len();
         match comp.compress_buf(in_buf, 0, &mut in_bytes, comp_buf, 0, &mut comp_bytes, true) {
-            DEFLATE_STATUS_OKAY => (),
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusOkay => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         comp.free();
@@ -1072,7 +1129,7 @@ mod tests {
         let decomp_buf = vec::from_elem(MIN_DECOMPRESS_BUF_SIZE, 0u8);
         let mut decomp_bytes = decomp_buf.len();
         match inflator.decompress_buf(comp_buf, 0, &mut de_in_bytes, true, decomp_buf, 0, &mut decomp_bytes, false) {
-            INFLATE_STATUS_DONE => (),
+            InflateStatusDone => (),
             _ => fail!()
         }
         inflator.free();
@@ -1100,7 +1157,7 @@ mod tests {
         let mut comp_bytes = comp_buf.len();
         let status = comp.compress_buf(in_buf, 0, &mut in_bytes, comp_buf, 0, &mut comp_bytes, true);
         match status {
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         comp.free();
@@ -1116,8 +1173,8 @@ mod tests {
         let mut decomp_bytes = decomp_buf.len();
         let status = inflator.decompress_buf(comp_buf, 0, &mut de_in_bytes, true, decomp_buf, 0, &mut decomp_bytes, false);
         match status {
-            INFLATE_STATUS_DONE => (),
-            INFLATE_STATUS_HAS_MORE_OUTPUT => { println("Has more output."); fail!(); },
+            InflateStatusDone => (),
+            InflateStatusHasMoreOutput => { println("Has more output."); fail!(); },
             _ => fail!()
         }
         inflator.free();
@@ -1145,8 +1202,8 @@ mod tests {
         let mut comp_bytes = comp_buf.len();
         let status = comp.compress_buf(in_buf, 0, &mut in_bytes, comp_buf, 0, &mut comp_bytes, true);
         match status {
-            DEFLATE_STATUS_OKAY => (),
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusOkay => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         comp.free();
@@ -1181,11 +1238,11 @@ mod tests {
             decomp_offset += decomp_bytes;
 
             match status {
-                INFLATE_STATUS_DONE => {
+                InflateStatusDone => {
                     decomp_data.push_all(decomp_buf.slice(0, decomp_offset));
                     break;
                 },
-                INFLATE_STATUS_HAS_MORE_OUTPUT => { 
+                InflateStatusHasMoreOutput => { 
                     //println("de: Has more output...");
                     if decomp_offset == decomp_total {
                         // output decomp_buf is full.  flush its content to the accumulator buffer.  Reset decomp_buf.
@@ -1193,7 +1250,7 @@ mod tests {
                         decomp_offset = 0;
                     }
                 },
-                INFLATE_STATUS_NEEDS_MORE_INPUT => {
+                InflateStatusNeedsMoreInput => {
                     fail!(fmt!("Decompression unexpected status.  status: %?", status))
                 },
                 _ => fail!(fmt!("Decompression failed.  status: %?", status))
@@ -1223,8 +1280,8 @@ mod tests {
         let mut comp_bytes = comp_buf.len();
         let status = comp.compress_buf(in_buf, 0, &mut in_bytes, comp_buf, 0, &mut comp_bytes, true);
         match status {
-            DEFLATE_STATUS_OKAY => (),
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusOkay => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         comp.free();
@@ -1261,11 +1318,11 @@ mod tests {
             decomp_offset += decomp_bytes;
 
             match status {
-                INFLATE_STATUS_DONE => {
+                InflateStatusDone => {
                     decomp_data.push_all(decomp_buf.slice(0, decomp_offset));
                     break;
                 },
-                INFLATE_STATUS_HAS_MORE_OUTPUT => { 
+                InflateStatusHasMoreOutput => { 
                     //println("de: Has more output...");
                     if decomp_offset == decomp_total {
                         // output decomp_buf is full.  flush its content to the accumulator buffer.  Reset decomp_buf.
@@ -1273,7 +1330,7 @@ mod tests {
                         decomp_offset = 0;
                     }
                 },
-                INFLATE_STATUS_NEEDS_MORE_INPUT => {
+                InflateStatusNeedsMoreInput => {
                     //println("de: Need more input......");
                 },
                 _ => fail!(fmt!("Decompression failed.  status: %?", status))
@@ -1297,7 +1354,7 @@ mod tests {
         let mut out_bytes = out_buf.len();
         let status = comp.compress_buf(in_buf, 0, &mut in_bytes, out_buf, 0, &mut out_bytes, true);
         match status {
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         let comp_buf = out_buf.slice(0, out_bytes);
@@ -1306,9 +1363,9 @@ mod tests {
         let mut mreader = MemReader::new(comp_buf.to_owned());
         let mut mwriter = MemWriter::new();
         let mut inflator = Inflator::new();
-        let status = inflator.decompress_pipe_rw(&mut mreader, &mut mwriter);
+        let status = inflator.decompress_stream_rw(&mut mreader, &mut mwriter);
         match status {
-            INFLATE_STATUS_DONE => (),
+            InflateStatusDone => (),
             _ => fail!()
         }
 
@@ -1328,8 +1385,8 @@ mod tests {
         let comp_buf = vec::from_elem(64, 0u8);
         let mut comp_bytes = comp_buf.len();
         match comp.compress_buf(in_buf, 0, &mut in_bytes, comp_buf, 0, &mut comp_bytes, true) {
-            DEFLATE_STATUS_OKAY => (),
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusOkay => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         comp.free();
@@ -1341,8 +1398,8 @@ mod tests {
         let status = inflator.decompress_buf(comp_buf, 0, &mut de_in_bytes, true, decomp_buf, 0, &mut decomp_bytes, false);
         //println(fmt!("status: %?", status));
         match status {
-            INFLATE_STATUS_DONE =>  fail!("Corrupted data should not work"),
-            INFLATE_STATUS_FAILED | _  => (),
+            InflateStatusDone =>  fail!("Corrupted data should not work"),
+            InflateStatusFailed | _  => (),
         }
         inflator.free();
 
@@ -1361,7 +1418,7 @@ mod tests {
         let mut out_bytes = out_buf.len();
         let status = comp.compress_buf(in_buf, 0, &mut in_bytes, out_buf, 0, &mut out_bytes, true);
         match status {
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         let comp_buf = out_buf.slice(0, out_bytes);
@@ -1412,7 +1469,7 @@ mod tests {
         let mut out_bytes = out_buf.len();
         let status = comp.compress_buf(in_buf, 0, &mut in_bytes, out_buf, 0, &mut out_bytes, true);
         match status {
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         let comp_buf = out_buf.slice(0, out_bytes);
@@ -1463,7 +1520,7 @@ mod tests {
         let mut out_bytes = out_buf.len();
         let status = comp.compress_buf(in_buf, 0, &mut in_bytes, out_buf, 0, &mut out_bytes, true);
         match status {
-            DEFLATE_STATUS_DONE => (),
+            DeflateStatusDone => (),
             _ => fail!()
         }
         let comp_buf = out_buf.slice(0, out_bytes);

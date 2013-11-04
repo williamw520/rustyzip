@@ -1,7 +1,12 @@
 #[link(name = "rustyzip",
-       vers = "0.1",
+       vers = "0.9",
        uuid = "f5bd100e-dbda-4e45-a461-493bd6da5b38")];
 #[crate_type = "lib"];
+
+
+#[deny(non_camel_case_types)];
+#[deny(missing_doc)];
+
 
 
 /******************************************************************************
@@ -25,12 +30,7 @@
  ******************************************************************************/
 
 
-extern mod extra;
-
-
-
-// Configure the modules in this crate
-pub mod rustyzip_lib {      // make mod pub so that its pub names can be linked by the linker.
-    pub mod deflate;
-    pub mod gzip;
-}
+/// The modules in this crate
+// make mod pub so that its pub names can be linked by the linker.
+pub mod deflate;
+pub mod gzip;
