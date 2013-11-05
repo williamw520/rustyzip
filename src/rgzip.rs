@@ -18,13 +18,13 @@ extern mod extra;
 // Uncomment either one of the following sections to link to one or the other library.
 
 // Uncomment these to use the local modules in the local rustyzip.lib.
-extern mod rustyzip;
-use rustyzip::gzip;
-use rustyzip::gzip::{GZip, GZipReader, GZipWriter};
+// extern mod rustyzip;
+// use rustyzip::gzip;
+// use rustyzip::gzip::{GZip, GZipReader, GZipWriter};
 
 // Uncomment these to use the modules in the system's libextra.
-// use extra::gzip;
-// use extra::gzip::{GZip, GZipReader, GZipWriter};
+use extra::gzip;
+use extra::gzip::{GZip, GZipReader, GZipWriter};
 
 
 
@@ -34,9 +34,10 @@ use std::vec;
 use std::result::{Result, Ok, Err};
 use std::to_str::ToStr;
 use std::path::Path;
-use std::rt::io::file;
-use std::rt::io::file::FileStream;
-use std::rt::io::{Reader, Writer, Open, Create, Read, Write, io_error};
+use std::rt::io;
+use std::rt::io::{Reader, Writer, Open, Read, Truncate, Write, io_error};
+use std::rt::io::fs;
+use std::rt::io::fs::File;
 use extra::getopts::{optflag, optopt, getopts};
 
 
@@ -188,7 +189,7 @@ fn get_file_name(filepath: &Path) -> ~str {
 }
 
 
-fn open_compressed_writer(options: &Options, file: &str) -> Result<FileStream, ~str> {
+fn open_compressed_writer(options: &Options, file: &str) -> Result<File, ~str> {
     if options.stdout {
         //let writer = stdio::stdout();
         //return writer;
@@ -201,7 +202,7 @@ fn open_compressed_writer(options: &Options, file: &str) -> Result<FileStream, ~
         return Err(format!("File {:s} already exists.  Use -f to overwrite it.", gz_filepath));
     }
 
-    match file::open(&out_filepath, Create, Write) {
+    match File::open_mode(&out_filepath, Truncate, Write) {
         Some(writer_stream) => Ok(writer_stream),
         None => Err(format!("Failed to open file {:?} for write.", out_filepath))
     }
@@ -209,15 +210,17 @@ fn open_compressed_writer(options: &Options, file: &str) -> Result<FileStream, ~
 
 fn compress_stream_loop<R: Reader, W: Writer>(mut stream_reader: R, mut stream_writer: W, filepath: &Path, options: &Options) -> ~str {
     let file_name = if options.no_name { ~"" } else { get_file_name(filepath) };
-    let mut mtime = 0u32;
-    let mut file_size = 0u32;
+    let mut mtime;
+    let mut file_size;
 
-    match file::stat(filepath) {
-        Some(fs) => {
-            mtime = if options.no_name { 0u32 } else { (fs.modified) as u32 };
-            file_size = fs.size as u32;
+    match io::result(|| fs::stat(filepath)) {
+        Ok(stat) => {
+            mtime = if options.no_name { 0u32 } else { (stat.modified / 1000) as u32 };
+            file_size = stat.size as u32;
         },
-        None => ()
+        Err(e) => {
+            return format!("{:?}", e);
+        }
     }
 
     match GZip::compress_init(&mut stream_writer, file_name, mtime, file_size) {
@@ -234,15 +237,17 @@ fn compress_stream_loop<R: Reader, W: Writer>(mut stream_reader: R, mut stream_w
 
 fn compress_write_loop<R: Reader, W: Writer>(mut stream_reader: R, stream_writer: W, filepath: &Path, options: &Options) -> ~str {
     let file_name = get_file_name(filepath);
-    let mut mtime = 0u32;
-    let mut file_size = 0u32;
+    let mut mtime;
+    let mut file_size;
 
-    match file::stat(filepath) {
-        Some(fs) => {
-            mtime = (fs.modified / 1000) as u32;
-            file_size = fs.size as u32;
+    match io::result(|| fs::stat(filepath)) {
+        Ok(stat) => {
+            mtime = if options.no_name { 0u32 } else { (stat.modified / 1000) as u32 };
+            file_size = stat.size as u32;
         },
-        None => ()
+        Err(e) => {
+            return format!("{:?}", e);
+        }
     }
 
     match GZipWriter::with_size_factor(stream_writer, file_name, mtime, file_size, options.compress_level, options.size_factor) {
@@ -279,7 +284,7 @@ fn compress_file(options: &Options, file: &str) -> ~[~str] {
     do io_error::cond.trap(|c| {
         results.push(c.to_str());
     }).inside {
-        match file::open(&filepath, Open, Read) {
+        match File::open_mode(&filepath, Open, Read) {
             Some(stream_reader) => {
                 match open_compressed_writer(options, file) {
                     Ok(stream_writer) => {
@@ -303,7 +308,7 @@ fn compress_file(options: &Options, file: &str) -> ~[~str] {
 }
 
 
-fn open_decompressed_writer(options: &Options, filepath: &Path) -> Result<FileStream, ~str> {
+fn open_decompressed_writer(options: &Options, filepath: &Path) -> Result<File, ~str> {
     if options.stdout {
         //let writer = stdio::stdout();
         //return writer;
@@ -319,7 +324,7 @@ fn open_decompressed_writer(options: &Options, filepath: &Path) -> Result<FileSt
     if out_filepath.exists() && !options.force {
         return Err(~"File already exists.  Use -f to overwrite it.");
     }
-    match file::open(&out_filepath, Create, Write) {
+    match File::open_mode(&out_filepath, Truncate, Write) {
         Some(writer_stream) => Ok(writer_stream),
         None => Err(~"Failed to open file for write.")
     }
@@ -396,7 +401,7 @@ fn decompress_file(options: &Options, file: &str) -> ~[~str] {
     do io_error::cond.trap(|c| {
         results.push(c.to_str());
     }).inside {
-        match file::open(&filepath, Open, Read) {
+        match File::open_mode(&filepath, Open, Read) {
             Some(stream_reader) => {
                 let result = if options.use_stream {
                     decompress_stream_loop(stream_reader, file, options)
@@ -426,19 +431,23 @@ fn list_file(file: &str) -> ~[~str] {
         None =>
             results.push(format!("File {:s} has no .gz suffix.  No action.", file))
     };
+    let mut file_size: u64;
+    match io::result(|| fs::stat(&filepath)) {
+        Ok(stat) => {
+            file_size = stat.size;
+        },
+        Err(_) => {
+            file_size = 0;
+        }
+    }
     if results.len() > 0 {
         return results;
     }
 
-    let file_size = match file::stat(&filepath) {
-        Some(fs)    => fs.size,
-        None        => 0
-    };
-
     do io_error::cond.trap(|c| {
         results.push(c.to_str());
     }).inside {
-        match file::open(&filepath, Open, Read) {
+        match File::open_mode(&filepath, Open, Read) {
             Some(stream_reader) => {
                 let mut stream_reader = stream_reader;
                 match GZip::read_info(&mut stream_reader) {

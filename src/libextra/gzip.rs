@@ -47,8 +47,8 @@ use std::num;
 use std::vec;
 use std::rt::io::{Reader, Writer, Decorator};
 use std::rt::io::{io_error, IoError, OtherIoError};
-use std::rt::io::file::FileStream;
-use std::rt::io::{Seek, SeekEnd};
+use std::rt::io::SeekEnd;
+use std::rt::io::fs::File;
 
 
 use super::deflate;
@@ -157,7 +157,7 @@ impl GZip {
     }
 
     /// Read info on the gzip file without uncompressing the data.
-    pub fn read_info(file_reader: &mut FileStream) -> Result<GZip, ~str> {
+    pub fn read_info(file_reader: &mut File) -> Result<GZip, ~str> {
         let mut gzip = GZip::new();
         match gzip.readHeader(file_reader).and_then( |_| gzip.readHeaderExtra(file_reader) ) {
             Ok(_)   => {
