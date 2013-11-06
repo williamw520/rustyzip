@@ -424,7 +424,7 @@ fn list_file(file: &str) -> ~[~str] {
     let filepath = Path::new(file);
     match filepath.extension_str() {
         Some(filetype) => {
-            if !filetype.to_ascii().to_lower().to_str_ascii().equals(&~".gz") {
+            if !filetype.to_ascii().to_lower().to_str_ascii().equals(&~"gz") {
                 results.push(format!("File {:s} does not have the .gz suffix.  No action.", file))
             }
         },

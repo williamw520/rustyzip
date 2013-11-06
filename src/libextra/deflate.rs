@@ -1,4 +1,4 @@
-// Copyright 2012 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2013 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -25,22 +25,32 @@
 
 /*!
 
-The deflate module provides compression and decompression support via the
+The deflate module provides compression and decompression support with the
 DEFLATE algorithm.  Its wraps the miniz.c as basis for the implementation
 for DEFLATE and provides an easy to use API in Rust.
 
 There are two sets of API: cursor-style API for operating data in batches,
 and the stream-style API for compressing and decompressing the whole streams.
 
-The compress_read and decompress_read are the API supporting reading and writing
-batches of data .  These are caller-driven functions where the caller is
-responsible to call them in a loop to process all the batches of data.
+The compress_read and decompress_read API support reading and writing batches
+of data.  These are caller-driven functions where the caller is responsible
+to call them repeatedly to process all data.
 
 The compress_stream and decompress_stream are the stream-style API that take
-in a source read_fn and a destination write_fn to compress/decompress all
-the data from the source to the destination streams automatically.  It is
-callee-driven with an internal loop running until all data have been processed.
-It's more efficient with less buffer copying.
+a source read_fn and a destination write_fn to compress/decompress all
+the data from the source to the destination stream automatically.  It is
+callee-driven with an internal loop running until all the data have been
+processed.  It's more efficient with less buffer copying.
+
+Note that often time a DEFLATE data stream is embedded in an outer containing
+stream, e.g. a zip file or a gzip file.  The API here only work with the DEFLATE
+portion of the data stream.  Be careful not to pass in data belonging to the
+outer stream.  The only exception is during decompression.  Since the total 
+length of the compressed data is sometime unknown during decompression (in 
+streaming situation), the decompression API will read as much data as possible
+from read_fn to attempt to decompress.  Any extra unprocessed data that are read
+in after the compressed data will be passed back to the caller.  The caller
+should treat the extra data as part of the outer containing stream.
 
 See gzip.rs for sample usage.
 
@@ -52,7 +62,7 @@ use std::libc::{c_void, size_t, c_int, c_uint};
 
 
 
-/// DEFLATE function return status
+/// Deflate function return status
 pub enum DeflateStatus {
     /// Invalid parameters passed into API. e.g. buffer too small
     DeflateStatusBadParam = -2,
@@ -120,18 +130,18 @@ impl InflateStatus {
 }
 
 
-/// The number of dictionary probes to use at each compression level (0-9). 0=implies fastest/minimal possible probing, 9=best compression but slowest
+/// The number of dictionary probes to use at each compression level (0-9). 0=implies fastest/minimal possible probing, 9=best compression but slowest.
 pub static MAX_COMPRESS_LEVEL : uint = 9;
-static TDEFL_NUM_PROBES : [c_uint, ..10] = [ 0 as c_uint, 1, 8, 16, 32, 128, 256, 512, 768, 1500 ];
+static TDEFL_NUM_PROBES : [c_uint, ..10] = [ 0 as c_uint, 2, 8, 32, 128, 256, 512, 1024, 2048, 4095 ];
 
-/// The minimum output buffer size for decompression.  Max size of the LZ dictionary is 32K at the beginning of an out_buf.
+/// Max size of the LZ dictionary is 32K at the beginning of an out_buf, which becomes the minimum output buffer size for decompression.
 pub static MIN_DECOMPRESS_BUF_SIZE : uint = 32768;
 
 /// The buf_size_factor for internal IO buffers.
-pub static MIN_SIZE_FACTOR : uint = 5;      // minimum size factor: 2^5 * 1K = 32K
-pub static DEFAULT_SIZE_FACTOR : uint = 8;  // default size factor: 2^8 * 1K = 256K
+pub static MIN_SIZE_FACTOR : uint = 5;              // minimum size factor: 2^5 * 1K = 32K
+pub static DEFAULT_SIZE_FACTOR : uint = 8;          // default size factor: 2^8 * 1K = 256K
 
-// Redefine flags here for internal use
+// Define the Miniz flags here for internal use
 static TDEFL_WRITE_ZLIB_HEADER : c_uint             = 0x01000;
 static TDEFL_COMPUTE_ADLER32 : c_uint               = 0x02000;
 static TDEFL_GREEDY_PARSING_FLAG : c_uint           = 0x04000;
@@ -151,6 +161,10 @@ static TINFL_FLAG_HAS_MORE_INPUT : c_uint                   = 2;
 static TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF : c_uint    = 4;
 static TINFL_FLAG_COMPUTE_ADLER32 : c_uint                  = 8;
 
+static LZ_NONE : c_int = 0x0;   // Huffman-coding only.
+static LZ_FAST : c_int = 0x1;   // LZ with only one probe
+static LZ_NORM : c_int = 0x80;  // LZ with 128 probes, "normal"
+static LZ_BEST : c_int = 0xfff; // LZ with 4095 probes, "best"
 
 
 mod rustrt {
@@ -186,7 +200,8 @@ mod rustrt {
 }
 
 
-/// Calculate the buffer size in bytes given the buf_size_factor.  It's in 2^buf_size_factor X 1K.
+/// Calculate the IO buffer size in bytes given a buf_size_factor.
+/// buf_size_factor is a power of 2.   buf_in_bytes = 1024 * 2 ^ buf_size_factor
 pub fn calc_buf_size(buf_size_factor: uint) -> uint {
     return 1024 * num::pow_with_uint(2, buf_size_factor);
 }
@@ -205,19 +220,19 @@ struct Deflator {
 }
 
 impl Deflator {
-    /// Create the Deflator structure and allocate the underlying tdefl_compressor structure.
+    /// Creates the Deflator structure and allocates the underlying tdefl_compressor structure.
     pub fn new() -> Deflator {
-        Deflator::with_size_factor(MIN_SIZE_FACTOR)
+        Deflator::with_size_factor(DEFAULT_SIZE_FACTOR)
     }
 
-    /// Create the Deflator structure and allocate the underlying tdefl_compressor structure.  
-    /// Set the IO buffers with buf_size_factor.  The buf_size_factor is a power of 2 of K: 2^buf_size_factor X 1K.
+    /// Creates the Deflator structure and allocates the underlying tdefl_compressor structure.
+    /// Allocates the IO buffers with buf_size_factor.  The buf_size_factor is a power of 2 of K: 2^buf_size_factor X 1K.
     pub fn with_size_factor(buf_size_factor: uint) -> Deflator {
         #[fixed_stack_segment];
         #[inline(never)];
         unsafe {
             Deflator {
-                tdefl_compressor: rustrt::tdefl_compressor_alloc(),
+                tdefl_compressor:   rustrt::tdefl_compressor_alloc(),
                 in_buf:             vec::from_elem(calc_buf_size(buf_size_factor), 0u8),
                 out_buf:            vec::from_elem(calc_buf_size(buf_size_factor) + MIN_DECOMPRESS_BUF_SIZE, 0u8),
                 in_offset:          0u,
@@ -229,7 +244,7 @@ impl Deflator {
         }
     }
 
-    /// Free the underlying tdefl_compressor structure.  After this call, the instance can not be used any more.
+    /// Releases the underlying tdefl_compressor structure.  After this call, the instance can not be used any more.
     /// Called by the drop() destructor.
     pub fn free(&mut self) {
         #[fixed_stack_segment];
@@ -242,7 +257,8 @@ impl Deflator {
         }
     }
 
-    /// Initialize the Deflator.
+    /// Initializes the Deflator.
+    ///
     /// compress_level is 0 to 10, where 0 is the fastest with decompressed raw data and 9 is the slowest with best compression.
     /// add_zlib_header set to true to add the ZLib-format header in front of and an ADLER32 CRC at the end of the deflated data.
     /// add_crc32 set to true to add an ADLER32 CRC at the end of the deflated data regardless how add_zlib is set.
@@ -264,9 +280,9 @@ impl Deflator {
         }
     }
 
+    /// Compresses all data read from the reader and writes the compressed data to the writer.
+    /// Runs until reading EOF from reader.  Waits on read or wait on write if they are blocked.
     /// Demo usage of compress_stream().
-    /// Compress all data read from the reader and write the compressed data to the writer.
-    /// Loop and run until reading EOF from reader.  Will wait on read or wait on write if they are blocked.
     pub fn compress_stream_rw<R: Reader, W: Writer>(&mut self, in_reader: &mut R, out_writer: &mut W) -> DeflateStatus {
         self.compress_stream(
             // upcall function to read data for compression
@@ -290,18 +306,20 @@ impl Deflator {
             })
     }
 
-    /// Compress using callback functions to caller (upcalls) to read data, write data.
-    /// The input data to compress are supplied by the read_fn callback function from caller.
-    /// The compressed data are sent to the write_fn callback function from caller.
-    /// Loop and run until reading EOF from read_fn.  Wait on read or wait on write if they are blocked.
+    /// Compresses using callback functions to caller (upcalls) to read data and write data.
+    /// The input to compress are supplied by the read_fn callback function of the caller.
+    /// The compressed data are sent to the write_fn callback function of the caller.
+    /// Runs until reading EOF from read_fn.  Waits on read or wait on write if they are blocked.
     ///
-    /// The callback read_fn takes an in_buf buffer to return one batch of read data at a time.
+    /// The callback read_fn returns one batch of input data at a time in the in_buf buffer.
     /// It returns the number of bytes read.  Returns 0 for EOF or no more data.
-    /// The callback write_fn function takes an out_buf buffer containing one batch of compressed data at a time
-    /// and is_eof is set for the last call to write data.  Write_fn can return an abort flag to abort the compression.
+    ///
+    /// The callback write_fn function takes in the out_buf buffer containing one batch of compressed data.
+    /// The is_eof flag is set for the last batch of compressed data.
+    /// Write_fn can return an abort flag to abort the compression.
     pub fn compress_stream(&mut self, 
-                         read_fn:  &fn(in_buf: &mut [u8])->uint, 
-                         write_fn: &fn(out_buf: &[u8], is_eof: bool)->bool) -> DeflateStatus {
+                           read_fn:  &fn(in_buf: &mut [u8])->uint, 
+                           write_fn: &fn(out_buf: &[u8], is_eof: bool)->bool) -> DeflateStatus {
 
         let out_buf_total = self.out_buf.len();
 
@@ -340,12 +358,14 @@ impl Deflator {
         }
     }
 
-    /// Compress one batch of input data at a time.  Caller drives the write loop.
-    /// Caller needs to call this function in a loop until all data are written out.
-    //  This approach has more more buffer copyings than the stream approach. 
-    /// Input to compress is supplied in input_buf, which will be fully written out before returning.
-    /// The compressed data are returned to caller via the write_fn callback.
-    /// Th final_write flag is set for the last batch of data to compress, to finalize the compressed data.
+    /// Compresses one batch of input data at a time.  Caller drives the write loop.
+    /// Caller needs to call this function repeatedly with new data until all data are written out.
+    //  This approach has more buffer copying than the stream approach.
+    ///
+    /// Input to compress is supplied in input_buf, which will be fully compressed and written out before returning.
+    /// The compressed data are sent to caller via the write_fn callback.
+    /// The final_write flag must be set for the last batch of data to compress, to finalize the compressed data.
+    /// The last batch of data can be zero-length.
     pub fn compress_write(&mut self,
                           input_buf: &[u8],
                           final_write: bool,
@@ -368,16 +388,17 @@ impl Deflator {
             }
             input_remaining = input_total - input_offset;
 
-            let mut in_bytes = self.in_buf_total - self.in_offset;      // number of bytes to compress in this batch;
-            let mut out_bytes = out_buf_total - self.out_offset;        // number of bytes of space avaiable in the out_buf;
-            let final_input = (final_write && input_remaining == 0);    // final_write and last batch in input_buf;
-            let status = self.compress_buf(self.in_buf, self.in_offset, &mut in_bytes, self.out_buf, self.out_offset, &mut out_bytes, final_input);
-            self.in_offset += in_bytes;                                 // advance offset by the number of bytes consumed;
-            self.out_offset += out_bytes;                               // advance offset by the number of bytes written;
+            let mut in_bytes = self.in_buf_total - self.in_offset;      // number of bytes to compress in this batch
+            let mut out_bytes = out_buf_total - self.out_offset;        // number of bytes of space avaiable in the out_buf
+            let final_input = (final_write && input_remaining == 0);    // final_write is set and last batch in input_buf
+            let status = self.compress_buf(self.in_buf, self.in_offset, &mut in_bytes, 
+                                           self.out_buf, self.out_offset, &mut out_bytes, final_input);
+            self.in_offset += in_bytes;                                 // advance offset by the number of bytes consumed
+            self.out_offset += out_bytes;                               // advance offset by the number of bytes written
 
             match status {
                 DeflateStatusOkay => {
-                    // If out_buf is full, write its content out.  Reset it.
+                    // Only when out_buf is full, write its content out.  Reset it.
                     if self.out_offset == out_buf_total {
                         write_fn(self.out_buf, false);
                         self.write_total += self.out_offset;
@@ -397,12 +418,15 @@ impl Deflator {
             if !final_write && input_remaining == 0 {
                 return DeflateStatusOkay;
             }
-            // Important: for the final_write, need to loop to flush all remaining data in in_buf and out_buf until DeflateStatusDone.
+            // Important: for the final_write, need to loop to flush all remaining data in 
+            // in_buf and out_buf until DeflateStatusDone.
         }
     }
 
     /// Low level compress method to compress input data to DEFLATE compliant compressed data.
-    /// Support different modes of operation depending on the parameters.
+    /// You really need to know what you are doing to call this directly.  It's fragile with edge cases.
+    /// It has multiple modes of operation depending on the parameters.
+    ///
     /// in_buf has the input data to be compressed.
     /// in_offset is the offset into in_buf to start reading the data.
     /// in_bytes is the number of bytes to read starting from in_offset, as call input.
@@ -468,13 +492,13 @@ struct Inflator {
 }
 
 impl Inflator {
-    /// Create the Inflator structure and allocate the underlying tdefl_compressor structure.
+    /// Creates the Inflator structure and allocates the underlying tdefl_compressor structure.
     pub fn new() -> Inflator {
-        Inflator::with_size_factor(MIN_SIZE_FACTOR)
+        Inflator::with_size_factor(DEFAULT_SIZE_FACTOR)
     }
 
-    /// Create the Inflator structure and allocate the underlying tdefl_compressor structure.
-    /// Set the IO buffers with buf_size_factor.  The buf_size_factor is a power of 2 of K: 2^buf_size_factor X 1K.
+    /// Creates the Inflator structure and allocates the underlying tdefl_compressor structure.
+    /// Allocates the IO buffers with buf_size_factor.  The buf_size_factor is a power of 2 of K: 2^buf_size_factor X 1K.
     pub fn with_size_factor(buf_size_factor: uint) -> Inflator {
         #[fixed_stack_segment];
         #[inline(never)];
@@ -494,7 +518,7 @@ impl Inflator {
         }
     }
 
-    /// Free the underlying tinfl_decompressor structure.  After this call, the instance must not be used anymore.
+    /// Releases the underlying tinfl_decompressor structure.  After this call, the instance must not be used anymore.
     pub fn free(&mut self) {
         #[fixed_stack_segment];
         #[inline(never)];
@@ -506,11 +530,10 @@ impl Inflator {
         }
     }
 
-    /// Demo usage of decompress_stream().
-    /// Read the input data from reader, decompress them, and output them to writer in a batch.
-    /// Decompress all data read from the reader and write the decompressed data to the writer.
+    /// Reads the input data from reader, decompressed them, and writes them to writer.
     /// Any extra input data from the reader beyond the compressed data are discarded.
-    /// Loop until reading EOF from reader.  Will wait on read or wait on write if they are blocked.
+    /// Loops until reading EOF from reader.  Waits on read or wait on write if they are blocked.
+    /// Demo usage of decompress_stream().
     pub fn decompress_stream_rw<R: Reader, W: Writer>(&mut self, in_reader: &mut R, out_writer: &mut W) -> InflateStatus {
         self.decompress_stream(
             // upcall function to read input data for decompression
@@ -540,23 +563,27 @@ impl Inflator {
             } )
     }
 
-    /// Read the input data from read_fn, decompress them, and output them to write_fn in a pipe directly.
-    /// This drives the read loop internally.  Loop until reading EOF from read_fn.  Less buffer copy.
-    /// The input data are read as much as possible to process the compressed data.  There might left-over
+    /// Reads the input data from read_fn, decompresses them, and writes them to write_fn.
+    /// This drives the read loop internally.  Loops until reading EOF from read_fn.  Less buffer copying.
+    /// The input data are read as much as possible to process the compressed data.  There might be left-over
     /// data not part of compressed data.  The remaining unprocessed input data are sent back to caller via the rest_fn.
     ///
-    /// The input data to decompress are supplied by the read_fn callback function from caller.
-    /// The decompressed data are sent to the write_fn callback function from caller.
-    /// The remaining unprocessed input data are sent back to the rest_fn callback function from caller.
+    /// The input data to decompress are supplied by the read_fn callback function of the caller.
+    /// The decompressed data are sent to the write_fn callback function of the caller.
+    /// The remaining unprocessed input data are sent back to the rest_fn callback function of the caller.
     ///
-    /// The callback read_fn takes an in_buf buffer to return one batch of read data at a time.
+    /// The callback read_fn returns one batch of input data at a time in the in_buf buffer.
     /// It returns the number of bytes read.  Returns 0 for EOF or no more data.
-    /// The callback write_fn takes an out_buf buffer containing one batch of decompressed data at a time
-    /// and is_eof is set for the last call to write data.  Write_fn can return an abort flag to abort the decompression.
+    ///
+    /// The callback write_fn takes in the out_buf buffer containing one batch of decompressed data.
+    /// The is_eof flag is set for the last batch of decompressed data.
+    /// Write_fn can return an abort flag to abort the decompression.
+    ///
+    /// The callback rest_fn takes in the rest_buf buffer containing any extra unprocessed input data.
     pub fn decompress_stream(&mut self, 
-                           read_fn:  &fn(in_buf: &mut [u8])->uint, 
-                           write_fn: &fn(out_buf: &[u8], is_eof: bool)->bool,
-                           rest_fn:  &fn(rest_buf: &[u8]) ) -> InflateStatus {
+                             read_fn:  &fn(in_buf: &mut [u8])->uint, 
+                             write_fn: &fn(out_buf: &[u8], is_eof: bool)->bool,
+                             rest_fn:  &fn(rest_buf: &[u8]) ) -> InflateStatus {
 
         let out_buf_total = self.out_buf.len();
 
@@ -571,14 +598,16 @@ impl Inflator {
             let mut in_bytes = self.in_buf_total - self.in_offset;
             let mut out_bytes = out_buf_total - self.out_offset;
             let final_input = self.in_buf_total == 0;
-            let status = self.decompress_buf(self.in_buf, self.in_offset, &mut in_bytes, final_input, self.out_buf, self.out_offset, &mut out_bytes, true);
+            let status = self.decompress_buf(self.in_buf, self.in_offset, &mut in_bytes, final_input, 
+                                             self.out_buf, self.out_offset, &mut out_bytes, true);
             self.in_offset += in_bytes;
             self.out_offset += out_bytes;
 
             match status {
                 InflateStatusNeedsMoreInput | InflateStatusHasMoreOutput => {
                     // The internal out_buf is full.  Time to writ it out.
-                    // Important to process until out_buf is full because the LZ dictionary at the beginning of the buffer is being re-used until buf is full.
+                    // Important to process until out_buf is full because the LZ dictionary 
+                    // at the beginning of the buffer is being re-used until buf is full.
                     if self.out_offset == out_buf_total {
                         self.write_total += self.out_offset;
                         if write_fn(self.out_buf, false) {
@@ -598,11 +627,11 @@ impl Inflator {
         }
     }
 
-    /// Decompress one batch of input data at a time.  The decompressed data are returned in output_buf.
+    /// Decompresses one batch of input data at a time.  The decompressed data are returned in output_buf.
     /// The length of the output data is returned in Ok(output_len).
-    /// Caller calls this function in a loop to read all the decompressed data until output_len is 0.
-    //  This approach has more buffer copyings than the stream approach. 
-    /// The input data to decompress are supplied by the read_fn callback function from caller.
+    /// Caller calls this function repeatedly to read all the decompressed data until output_len is 0.
+    //  This approach has more buffer copying than the stream approach.
+    /// The input to decompress are supplied by the read_fn callback function of the caller.
     /// The decompressed data are returned to caller one batch at a time.
     /// After reaching the end of output, the remaining unprocessed input data can be retrieved with get_rest().
     pub fn decompress_read(&mut self, 
@@ -639,18 +668,20 @@ impl Inflator {
                 let mut in_bytes = self.in_buf_total - self.in_offset;
                 let mut out_bytes = out_buf_total - self.out_offset;
                 let final_input = self.in_buf_total == 0;
-                let status = self.decompress_buf(self.in_buf, self.in_offset, &mut in_bytes, final_input, self.out_buf, self.out_offset, &mut out_bytes, true);
+                let status = self.decompress_buf(self.in_buf, self.in_offset, &mut in_bytes, final_input, 
+                                                 self.out_buf, self.out_offset, &mut out_bytes, true);
                 self.in_offset += in_bytes;
                 self.out_offset += out_bytes;
 
                 match status {
                     InflateStatusNeedsMoreInput | InflateStatusHasMoreOutput => {
                         // The internal out_buf is full; break out to drain output.
-                        // Important to process until out_buf is full because the LZ dictionary at the beginning of the buffer is being re-used until buf is full.
+                        // Important to process until out_buf is full because the LZ dictionary 
+                        // at the beginning of the buffer is being re-used until buf is full.
                         if self.out_offset == out_buf_total {
                             break;
                         }
-                        // Otherwise loop back read more input
+                        // Otherwise loop back to read more input
                     },
                     InflateStatusDone => {
                         // Break out to drain output.
@@ -663,20 +694,22 @@ impl Inflator {
         }
     }
 
-    /// Get the buffer length of the rest_buf, the extra data left over from decompression.
+    /// Gets the buffer length of the rest_buf, the extra data left over from decompression.
     pub fn get_rest_len(&self) -> uint {
         return self.in_buf_total - self.in_offset;
     }
 
-    /// Get the rest_buf, the extra data left over from decompression.
+    /// Gets the rest_buf, the extra data left over from decompression.
     pub fn get_rest(&self, rest_buf: &mut [u8]) -> uint {
         let copy_len = num::min(rest_buf.len(), self.in_buf_total - self.in_offset);
         vec::bytes::copy_memory(rest_buf, self.in_buf.slice(self.in_offset, self.in_buf_total), copy_len);
         return copy_len;
     }
 
-    /// Low level decompress method.  Decompress DEFLATE compliant compressed data back to the original data.
-    /// Support different modes of operation depending on the parameters.
+    /// Low level decompress method.  Decompresses DEFLATE-encoded compressed data.
+    /// You really need to know what you are doing to call this directly.  It's fragile with edge cases.
+    /// It has multiple modes of operation depending on the parameters.
+    ///
     /// in_buf has the input data to be decompressed.
     /// in_offset is the offset into in_buf to start reading the data.
     /// in_bytes is the number of bytes to read starting from in_offset, as call input.
@@ -733,6 +766,7 @@ impl Drop for Inflator {
         self.free();
     }
 }
+
 
 
 
