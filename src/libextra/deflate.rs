@@ -196,6 +196,19 @@ mod rustrt {
                                 pOut_buf_next: *c_void, 
                                 pOut_buf_size: *mut size_t, 
                                 decompress_flags: c_uint) -> c_int;
+
+        pub fn tdefl_compress_mem_to_heap(psrc_buf: *c_void,
+                                          src_buf_len: size_t,
+                                          pout_len: *mut size_t,
+                                          flags: c_int)
+                                          -> *c_void;
+        pub fn tinfl_decompress_mem_to_heap(psrc_buf: *c_void,
+                                            src_buf_len: size_t,
+                                            pout_len: *mut size_t,
+                                            flags: c_int)
+                                            -> *c_void;
+
+        pub fn mz_free(pBuf: *c_void) -> *c_void;
     }
 }
 
@@ -769,6 +782,67 @@ impl Drop for Inflator {
 
 
 
+fn deflate_bytes_internal(bytes: &[u8], flags: c_int) -> ~[u8] {
+    #[fixed_stack_segment]; #[inline(never)];
+
+    do bytes.as_imm_buf |b, len| {
+        unsafe {
+            let mut outsz : size_t = 0;
+            let res =
+                rustrt::tdefl_compress_mem_to_heap(b as *c_void,
+                                                   len as size_t,
+                                                   &mut outsz,
+                                                   flags);
+            assert!(res as int != 0);
+            let out = vec::raw::from_buf_raw(res as *u8,
+                                             outsz as uint);
+            rustrt::mz_free(res);
+            out
+        }
+    }
+}
+
+/// Compress a byte buffer to a buffer in heap
+pub fn deflate_bytes(bytes: &[u8]) -> ~[u8] {
+    deflate_bytes_internal(bytes, LZ_NORM)
+}
+
+/// Compress a byte buffer to a buffer in heap with zlib-header
+pub fn deflate_bytes_zlib(bytes: &[u8]) -> ~[u8] {
+    deflate_bytes_internal(bytes, LZ_NORM | TDEFL_WRITE_ZLIB_HEADER as c_int)
+}
+
+fn inflate_bytes_internal(bytes: &[u8], flags: c_int) -> ~[u8] {
+    #[fixed_stack_segment]; #[inline(never)];
+
+    do bytes.as_imm_buf |b, len| {
+        unsafe {
+            let mut outsz : size_t = 0;
+            let res =
+                rustrt::tinfl_decompress_mem_to_heap(b as *c_void,
+                                                     len as size_t,
+                                                     &mut outsz,
+                                                     flags);
+            assert!(res as int != 0);
+            let out = vec::raw::from_buf_raw(res as *u8,
+                                            outsz as uint);
+            rustrt::mz_free(res);
+            out
+        }
+    }
+}
+
+/// Decompress a byte buffer to a buffer in heap
+pub fn inflate_bytes(bytes: &[u8]) -> ~[u8] {
+    inflate_bytes_internal(bytes, 0)
+}
+
+/// Decompress a byte buffer with zlib-header to a buffer in heap
+pub fn inflate_bytes_zlib(bytes: &[u8]) -> ~[u8] {
+    inflate_bytes_internal(bytes, TINFL_FLAG_PARSE_ZLIB_HEADER as c_int)
+}
+
+
 
 #[cfg(test)]
 mod tests {
@@ -780,7 +854,11 @@ mod tests {
     use std::ptr;
     use std::rand;
     use std::rand::Rng;
-//    use super::*;
+    use super::Deflator;
+    use super::Inflator;
+    use super::MIN_DECOMPRESS_BUF_SIZE;
+    use super::deflate_bytes;
+    use super::inflate_bytes;
 
     #[test]
     fn test_deflator_alloc() {
@@ -1121,7 +1199,7 @@ mod tests {
         comp.free();
 
         let comp_buf = ~[0x73, 0x74, 0x72, 0x76, 0x71, 0x75, 0x73, 0xF7, 0xE0, 0xE5, 0x02, 0x00, 0x94, 0xA6, 0xD7, 0xD0, 0x0A, 0x00, 0x00, 0x00];
-        println(fmt!("1: comp_buf: %?", comp_buf));
+        //println(format!("1: comp_buf: {:?}", comp_buf));
 
         let mut inflator = Inflator::new();
         let de_in_total = comp_buf.len();
@@ -1134,11 +1212,10 @@ mod tests {
         }
         inflator.free();
 
-        let decomp_data = decomp_buf.slice(0, decomp_bytes);
-
-        println(fmt!("1: decomp_data: %?", decomp_data));
-        println(fmt!("1: de_in_bytes: %?", de_in_bytes));
-        println(fmt!("1: de_in_total: %?", de_in_total));
+        // let decomp_data = decomp_buf.slice(0, decomp_bytes);
+        // println(format!("1: decomp_data: {:?}", decomp_data));
+        // println(format!("1: de_in_bytes: {:?}", de_in_bytes));
+        // println(format!("1: de_in_total: {:?}", de_in_total));
 
     }
 
@@ -1181,7 +1258,7 @@ mod tests {
         let mut rnd = rand::rng();
         let mut words = ~[];
         do 2000.times {
-            let range = rnd.gen_integer_range(1u, 10);
+            let range = rnd.gen_range(1u, 10);
             words.push(rnd.gen_vec::<u8>(range));
         }
 
@@ -1196,10 +1273,10 @@ mod tests {
         }
         comp.free();
 
-        //println(fmt!("in_buf: %?", in_buf.len()));
-        //println(fmt!("2. status: %?", status));
-        //println(fmt!("2. in_bytes: %?", in_bytes));
-        //println(fmt!("2. comp_bytes: %?", comp_bytes));
+        //println(format!("in_buf: {:?}", in_buf.len()));
+        //println(format!("2. status: {:?}", status));
+        //println(format!("2. in_bytes: {:?}", in_bytes));
+        //println(format!("2. comp_bytes: {:?}", comp_bytes));
 
         let mut inflator = Inflator::new();
         let mut de_in_bytes = comp_bytes;
@@ -1226,7 +1303,7 @@ mod tests {
         let mut rnd = rand::rng();
         let mut words = ~[];
         do 20000.times {
-            let range = rnd.gen_integer_range(1u, 10);
+            let range = rnd.gen_range(1u, 10);
             words.push(rnd.gen_vec::<u8>(range));
         }
 
@@ -1242,10 +1319,10 @@ mod tests {
         }
         comp.free();
 
-        // println(fmt!("2. in_buf: %?", in_buf.len()));
-        // println(fmt!("2. status: %?", status));
-        // println(fmt!("2. in_bytes: %?", in_bytes));
-        // println(fmt!("2. comp_bytes: %?", comp_bytes));
+        // println(format!("2. in_buf: {:?}", in_buf.len()));
+        // println(format!("2. status: {:?}", status));
+        // println(format!("2. in_bytes: {:?}", in_bytes));
+        // println(format!("2. comp_bytes: {:?}", comp_bytes));
 
         let mut inflator = Inflator::new();
         let de_in_total = comp_bytes;
@@ -1260,13 +1337,13 @@ mod tests {
             de_in_bytes = de_in_total - de_in_offset;
             decomp_bytes = decomp_total - decomp_offset;
             let status = inflator.decompress_buf(comp_buf, de_in_offset, &mut de_in_bytes, true, decomp_buf, decomp_offset, &mut decomp_bytes, true);
-            // println(fmt!("de: status: %?", status));
-            // println(fmt!("de: de_in_offset: %?", de_in_offset));
-            // println(fmt!("de: de_in_bytes: %?", de_in_bytes));
-            // println(fmt!("de: de_in_total: %?", de_in_total));
-            // println(fmt!("de: decomp_offset: %?", decomp_offset));
-            // println(fmt!("de: decomp_bytes: %?", decomp_bytes));
-            // println(fmt!("de: decomp_total: %?", decomp_total));
+            // println(format!("de: status: {:?}", status));
+            // println(format!("de: de_in_offset: {:?}", de_in_offset));
+            // println(format!("de: de_in_bytes: {:?}", de_in_bytes));
+            // println(format!("de: de_in_total: {:?}", de_in_total));
+            // println(format!("de: decomp_offset: {:?}", decomp_offset));
+            // println(format!("de: decomp_bytes: {:?}", decomp_bytes));
+            // println(format!("de: decomp_total: {:?}", decomp_total));
 
             de_in_offset += de_in_bytes;
             decomp_offset += decomp_bytes;
@@ -1285,9 +1362,9 @@ mod tests {
                     }
                 },
                 InflateStatusNeedsMoreInput => {
-                    fail!(fmt!("Decompression unexpected status.  status: %?", status))
+                    fail!(format!("Decompression unexpected status.  status: {:?}", status))
                 },
-                _ => fail!(fmt!("Decompression failed.  status: %?", status))
+                _ => fail!(format!("Decompression failed.  status: {:?}", status))
             }
         }
 
@@ -1304,7 +1381,7 @@ mod tests {
         let mut rnd = rand::rng();
         let mut words = ~[];
         do 20000.times {
-            let range = rnd.gen_integer_range(1u, 10);
+            let range = rnd.gen_range(1u, 10);
             words.push(rnd.gen_vec::<u8>(range));
         }
 
@@ -1320,10 +1397,10 @@ mod tests {
         }
         comp.free();
 
-        // println(fmt!("2. in_buf: %?", in_buf.len()));
-        // println(fmt!("2. status: %?", status));
-        // println(fmt!("2. in_bytes: %?", in_bytes));
-        // println(fmt!("2. comp_bytes: %?", comp_bytes));
+        // println(format!("2. in_buf: {:?}", in_buf.len()));
+        // println(format!("2. status: {:?}", status));
+        // println(format!("2. in_bytes: {:?}", in_bytes));
+        // println(format!("2. comp_bytes: {:?}", comp_bytes));
 
         let mut inflator = Inflator::new();
         let de_in_total = comp_bytes;
@@ -1340,13 +1417,13 @@ mod tests {
             decomp_bytes = decomp_total - decomp_offset;
             let final_input = de_in_offset + de_in_bytes == de_in_total;
             let status = inflator.decompress_buf(comp_buf, de_in_offset, &mut de_in_bytes, final_input, decomp_buf, decomp_offset, &mut decomp_bytes, true);
-            // println(fmt!("de: status: %?", status));
-            // println(fmt!("de: de_in_offset: %?", de_in_offset));
-            // println(fmt!("de: de_in_bytes: %?", de_in_bytes));
-            // println(fmt!("de: de_in_total: %?", de_in_total));
-            // println(fmt!("de: decomp_offset: %?", decomp_offset));
-            // println(fmt!("de: decomp_bytes: %?", decomp_bytes));
-            // println(fmt!("de: decomp_total: %?", decomp_total));
+            // println(format!("de: status: {:?}", status));
+            // println(format!("de: de_in_offset: {:?}", de_in_offset));
+            // println(format!("de: de_in_bytes: {:?}", de_in_bytes));
+            // println(format!("de: de_in_total: {:?}", de_in_total));
+            // println(format!("de: decomp_offset: {:?}", decomp_offset));
+            // println(format!("de: decomp_bytes: {:?}", decomp_bytes));
+            // println(format!("de: decomp_total: {:?}", decomp_total));
 
             de_in_offset += de_in_bytes;
             decomp_offset += decomp_bytes;
@@ -1367,7 +1444,7 @@ mod tests {
                 InflateStatusNeedsMoreInput => {
                     //println("de: Need more input......");
                 },
-                _ => fail!(fmt!("Decompression failed.  status: %?", status))
+                _ => fail!(format!("Decompression failed.  status: {:?}", status))
             }
         }
 
@@ -1430,7 +1507,7 @@ mod tests {
         let decomp_buf = vec::from_elem(MIN_DECOMPRESS_BUF_SIZE, 0u8);
         let mut decomp_bytes = decomp_buf.len();
         let status = inflator.decompress_buf(comp_buf, 0, &mut de_in_bytes, true, decomp_buf, 0, &mut decomp_bytes, false);
-        //println(fmt!("status: %?", status));
+        //println(format!("status: {:?}", status));
         match status {
             InflateStatusDone =>  fail!("Corrupted data should not work"),
             InflateStatusFailed | _  => (),
@@ -1475,14 +1552,14 @@ mod tests {
                     }
                 },
                 output_buf);
-            //println(fmt!("retval: %?", retval));
+            //println(format!("retval: {:?}", retval));
             match retval {
                 Ok(0) => 
                     break,
                 Ok(output_len) => 
                     decomp_buf.push_all(output_buf.slice(0, output_len)),
                 _ => 
-                    fail!(fmt!("retval: %?", retval))
+                    fail!(format!("retval: {:?}", retval))
             }
         }
 
@@ -1526,14 +1603,14 @@ mod tests {
                     }
                 },
                 output_buf);
-            //println(fmt!("retval: %?", retval));
+            //println(format!("retval: {:?}", retval));
             match retval {
                 Ok(0) => 
                     break,
                 Ok(output_len) => 
                     decomp_buf.push_all(output_buf.slice(0, output_len)),
                 _ => 
-                    fail!(fmt!("retval: %?", retval))
+                    fail!(format!("retval: {:?}", retval))
             }
         }
 
@@ -1577,20 +1654,55 @@ mod tests {
                     }
                 },
                 output_buf);
-            //println(fmt!("retval: %?", retval));
+            //println(format!("retval: {:?}", retval));
             match retval {
                 Ok(0) => 
                     break,
                 Ok(output_len) => 
                     decomp_buf.push_all(output_buf.slice(0, output_len)),
                 _ => 
-                    fail!(fmt!("retval: %?", retval))
+                    fail!(format!("retval: {:?}", retval))
             }
         }
 
         assert!(( in_buf == decomp_buf ));
 
         inflator.free();
+    }
+
+
+
+
+    #[test]
+    fn test_flate_round_trip() {
+        let mut r = rand::rng();
+        let mut words = ~[];
+        do 20.times {
+            let range = r.gen_range(1u, 10);
+            words.push(r.gen_vec::<u8>(range));
+        }
+        do 20.times {
+            let mut input = ~[];
+            do 2000.times {
+                input.push_all(r.choose(words));
+            }
+            debug!("de/inflate of {} bytes of random word-sequences",
+                   input.len());
+            let cmp = deflate_bytes(input);
+            let out = inflate_bytes(cmp);
+            debug!("{} bytes deflated to {} ({:.1f}% size)",
+                   input.len(), cmp.len(),
+                   100.0 * ((cmp.len() as f64) / (input.len() as f64)));
+            assert_eq!(input, out);
+        }
+    }
+
+    #[test]
+    fn test_zlib_flate() {
+        let bytes = ~[1, 2, 3, 4, 5];
+        let deflated = deflate_bytes(bytes);
+        let inflated = inflate_bytes(deflated);
+        assert_eq!(inflated, bytes);
     }
 
 }

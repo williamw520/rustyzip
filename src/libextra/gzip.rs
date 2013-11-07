@@ -836,8 +836,10 @@ mod tests {
 
     use std::rt::io::Reader;
     use std::rt::io::mem::MemReader;
-    use std::rand;
-    use std::rand::Rng;
+    use std::rt::io::mem::MemWriter;
+    use super::GZipReader;
+    use super::GZipWriter;
+
 
     #[test]
     fn test_generate_crc_table() {
@@ -848,14 +850,53 @@ mod tests {
     #[test]
     fn test_gzip_reader() {
 
+        let original_data = bytes!("ABCDEFGH\r\n");
         let comp_reader = MemReader::new(~[0x1f, 0x8B, 0x08, 0x08, 0x54, 0x3C, 0x3D, 0x52, 0x00, 0x03, 0x74, 0x65, 0x73, 0x74, 0x31, 0x00, 0x73, 0x74, 0x72, 0x76, 0x71, 0x75, 0x73, 0xF7, 0xE0, 0xE5, 0x02, 0x00, 0x94, 0xA6, 0xD7, 0xD0, 0x0A, 0x00, 0x00, 0x00]);
-        //let mut mem_writer = MemWriter::new();
-        let gzip_reader_res = GZipReader::new(comp_reader);
-        let mut gzip_reader = gzip_reader_res.unwrap();
-        let mut out_buf = [0u8, ..64];
-        let out_len = gzip_reader.read(out_buf);
-        let decomp_buf = out_buf.slice(0, out_len.unwrap());
-        println(format!("gzip_reader.read(): %?", decomp_buf));
+        match GZipReader::new(comp_reader) {
+            Ok(gzip_reader) => {
+                let mut gzip_reader = gzip_reader;
+                let mut out_buf = [0u8, ..64];
+                let out_len = gzip_reader.read(out_buf);
+                let decomp_buf = out_buf.slice(0, out_len.unwrap());
+                // println(format!("original_data:  {:?}", original_data.clone()));
+                // println(format!("decomp_buf:     {:?}", decomp_buf));
+                assert!(( decomp_buf.eq(&original_data) ));
+            },
+            Err(e) => fail!(e)
+        }
+    }
+
+    #[test]
+    fn test_gzip_writer() {
+
+        // Compress the data
+        let original_data = bytes!("ABCDEFGH");
+        let mut comp_data;
+        match (GZipWriter::new(MemWriter::new())) {
+            Ok(gzip_writer) => {
+                let mut gzip_writer = gzip_writer;
+                gzip_writer.write(original_data);
+                gzip_writer.finalize();
+                comp_data = gzip_writer.inner().inner();
+                //println(format!("comp_data: {:?}", comp_data));
+            },
+            Err(e) => fail!(e)
+        }
+
+        // Decompress the compressed data to compare to the original.
+        match GZipReader::new(MemReader::new(comp_data)) {
+            Ok(gzip_reader) => {
+                let mut gzip_reader = gzip_reader;
+                let mut out_buf = [0u8, ..64];
+                let out_len = gzip_reader.read(out_buf);
+                let decomp_buf = out_buf.slice(0, out_len.unwrap());
+                // println(format!("original_data:  {:?}", original_data.clone()));
+                // println(format!("decomp_buf:     {:?}", decomp_buf));
+                assert!(( decomp_buf.eq(&original_data) ));
+            },
+            Err(e) => fail!(e)
+        }
+
     }
 
 }

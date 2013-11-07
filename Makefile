@@ -44,6 +44,6 @@ clean:
 
 
 test-lib:
-	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS) --test $(SRC_DIR)/lib.rs
-	@$(BUILD_DIR)/lib
+	@$(RUSTC) --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS) --test $(SRC_DIR)/libextra/lib.rs
+	@$(BUILD_DIR)/${RUSTYZIP_LIB}
 
