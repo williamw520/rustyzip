@@ -50,9 +50,6 @@ tdefl_init
 tdefl_compress
 tinfl_decompress
 mz_free
-rust_raw_thread_start
-rust_raw_thread_join
-rust_raw_thread_delete
 swap_registers
 rust_readdir
 rust_opendir

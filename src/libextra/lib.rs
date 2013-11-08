@@ -34,3 +34,4 @@
 // make mod pub so that its pub names can be linked by the linker.
 pub mod deflate;
 pub mod gzip;
+pub mod zip;

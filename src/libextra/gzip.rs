@@ -844,7 +844,7 @@ mod tests {
     #[test]
     fn test_generate_crc_table() {
         // Uncomment to generate the crc table text.
-        //generate_crc_table();
+        // super::generate_crc_table();
     }
 
     #[test]

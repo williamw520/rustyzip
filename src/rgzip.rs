@@ -276,7 +276,7 @@ fn compress_file(options: &Options, file: &str) -> ~[~str] {
     let mut results : ~[~str] = ~[];
 
     let filepath = Path::new(file);
-    if filepath.extension_str().unwrap_or("").to_ascii().to_lower().to_str_ascii().equals(&~"gz") {
+    if filepath.extension_str().unwrap_or("").to_ascii().to_lower().into_str().equals(&~"gz") {
         results.push(format!("File {:s} already has the .gz suffix -- unchanged", file));
         return results;
     }
@@ -387,7 +387,7 @@ fn decompress_file(options: &Options, file: &str) -> ~[~str] {
     let filepath = Path::new(file);
     match filepath.extension_str() {
         Some(filetype) => {
-            if !filetype.to_ascii().to_lower().to_str_ascii().equals(&~"gz") {
+            if !filetype.to_ascii().to_lower().into_str().equals(&~"gz") {
                 results.push(format!("File {:s} does not have the .gz suffix.  No action.", file))
             }
         },
@@ -424,7 +424,7 @@ fn list_file(file: &str) -> ~[~str] {
     let filepath = Path::new(file);
     match filepath.extension_str() {
         Some(filetype) => {
-            if !filetype.to_ascii().to_lower().to_str_ascii().equals(&~"gz") {
+            if !filetype.to_ascii().to_lower().into_str().equals(&~"gz") {
                 results.push(format!("File {:s} does not have the .gz suffix.  No action.", file))
             }
         },
@@ -489,13 +489,23 @@ fn main()  {
                 VERSION =>
                     print_version(&args),
                 COMPRESS => {
-                    for file in options.files.iter() {
-                        print_lines(compress_file(&options, *file));
+                    if options.files.len() > 0 {
+                        for file in options.files.iter() {
+                            print_lines(compress_file(&options, *file));
+                        }
+                    } else {
+                        println("Missing file(s)");
+                        print_usage(&args);
                     }
                 },
                 DECOMPRESS => {
-                    for file in options.files.iter() {
-                        print_lines(decompress_file(&options, *file));
+                    if options.files.len() > 0 {
+                        for file in options.files.iter() {
+                            print_lines(decompress_file(&options, *file));
+                        }
+                    } else {
+                        println("Missing file(s)");
+                        print_usage(&args);
                     }
                 },
                 LIST => {

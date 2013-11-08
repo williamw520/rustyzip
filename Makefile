@@ -2,6 +2,7 @@
 # Targets
 RUSTYZIP_LIB = rustyzip
 RGZIP = rgzip
+RZIP = rzip
 
 # Dir setup
 ROOT_DIR        = .
@@ -17,8 +18,8 @@ ROPTS           = --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS)
 RUSTC           = rustc.exe
 
 
-all:  $(BUILD_DIR)/$(RGZIP)
-#all:  $(BUILD_DIR)/$(RUSTYZIP_LIB)
+all:  $(BUILD_DIR)/$(RZIP) 
+#all:  $(BUILD_DIR)/$(RGZIP) $(BUILD_DIR)/$(RZIP) 
 
 $(BUILD_DIR)/$(BUILD_DIR).stamp:
 	@echo "Building $@..."
@@ -33,6 +34,10 @@ $(BUILD_DIR)/$(RUSTYZIP_LIB).stamp: $(SRC_DIR)/libextra/lib.rs  $(wildcard $(SRC
 $(BUILD_DIR)/$(RUSTYZIP_LIB): $(BUILD_DIR)/$(RUSTYZIP_LIB).stamp  $(BUILD_DIR)/$(BUILD_DIR).stamp
 
 $(BUILD_DIR)/$(RGZIP): $(SRC_DIR)/$(RGZIP).rs $(BUILD_DIR)/$(RUSTYZIP_LIB)
+	@echo "Building $@..."
+	@$(RUSTC) $(ROPTS)  $<
+
+$(BUILD_DIR)/$(RZIP): $(SRC_DIR)/$(RZIP).rs $(BUILD_DIR)/$(RUSTYZIP_LIB)
 	@echo "Building $@..."
 	@$(RUSTC) $(ROPTS)  $<
 
