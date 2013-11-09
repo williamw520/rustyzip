@@ -126,6 +126,15 @@ impl ZipFile {
         Ok(entries)
     }
 
+    fn zip_entry_reader<'a>(&'a mut self, entry: &ZipEntry32) -> ZipReader<'a> {
+        self.inner_file.seek(entry.local_header_offset as i64, SeekSet);
+        ZipReader {
+            zip_file:   self,
+            zip_entry:  entry.clone(),
+            is_eof:     false,
+        }
+    }
+
 }
 
 
@@ -219,6 +228,7 @@ impl CDMetaData {
 
 
 /// A file item entry for a file item embedded in a zip file.
+#[deriving(Clone)]
 pub struct ZipEntry32 {
     /// version of zip format created this entry
     version_made_by:            u16,
@@ -410,6 +420,26 @@ impl<'self> Iterator<ZipEntry32> for ZipEntry32Iterator<'self> {
         }
     }
 }
+
+/// Reader for reading the content of the file item at the zip entry.
+pub struct ZipReader<'self> {
+    priv zip_file:  &'self mut ZipFile,
+    priv zip_entry: ZipEntry32,
+    priv is_eof:    bool,
+}
+
+impl<'self> Reader for ZipReader<'self> {
+    /// Read the decompressed data from the file item inside the zip file.
+    fn read(&mut self, output_buf: &mut [u8]) -> Option<uint> {
+
+        Some(0)
+    }
+
+    fn eof(&mut self) -> bool {
+        return self.is_eof;
+    }
+}
+
 
 
 /// Pack a u16 into byte buffer in little-endian

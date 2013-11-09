@@ -18,8 +18,9 @@ ROPTS           = --out-dir=$(BUILD_DIR) -L $(LIBRARY_DIRS)
 RUSTC           = rustc.exe
 
 
-all:  $(BUILD_DIR)/$(RZIP) 
-#all:  $(BUILD_DIR)/$(RGZIP) $(BUILD_DIR)/$(RZIP) 
+#all:  $(BUILD_DIR)/$(RZIP)
+#all:  $(BUILD_DIR)/$(RGZIP)
+all:  $(BUILD_DIR)/$(RGZIP) $(BUILD_DIR)/$(RZIP)
 
 $(BUILD_DIR)/$(BUILD_DIR).stamp:
 	@echo "Building $@..."
