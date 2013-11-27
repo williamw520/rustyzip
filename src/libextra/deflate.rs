@@ -222,12 +222,12 @@ pub fn calc_buf_size(buf_size_factor: uint) -> uint {
 
 /// Compression data structure
 struct Deflator {
-    tdefl_compressor: *c_void,
-    in_buf: ~[u8],
-    out_buf: ~[u8],
-    in_offset: uint,
-    in_buf_total: uint,
-    out_offset: uint,
+    priv tdefl_compressor: *c_void,
+    priv in_buf: ~[u8],
+    priv out_buf: ~[u8],
+    priv in_offset: uint,
+    priv in_buf_total: uint,
+    priv out_offset: uint,
     read_total: uint,
     write_total: uint,
 }
@@ -272,7 +272,7 @@ impl Deflator {
 
     /// Initializes the Deflator.
     ///
-    /// compress_level is 0 to 10, where 0 is the fastest with decompressed raw data and 9 is the slowest with best compression.
+    /// compress_level is 0 to 9, where 0 is the fastest with decompressed raw data and 9 is the slowest with best compression.
     /// add_zlib_header set to true to add the ZLib-format header in front of and an ADLER32 CRC at the end of the deflated data.
     /// add_crc32 set to true to add an ADLER32 CRC at the end of the deflated data regardless how add_zlib is set.
     pub fn init(&self, compress_level: uint, add_zlib_header: bool, add_crc32: bool) -> DeflateStatus {
@@ -300,13 +300,9 @@ impl Deflator {
         self.compress_stream(
             // upcall function to read data for compression
             |in_buf| {
-                if in_reader.eof() {
-                    0                           // Return 0 for EOF
-                } else {
-                    match in_reader.read(in_buf) {
-                        Some(nread) => nread,   // Return number of bytes read, including 0 for EOF
+                match in_reader.read(in_buf) {
+                    Some(nread) => nread,   // Return number of bytes read, including 0 for EOF
                         None => 0               // Return 0 for EOF
-                    }
                 }
             },
             // upcall function to write compressed data
@@ -492,14 +488,14 @@ impl Drop for Deflator {
 
 /// Decompression data structure
 struct Inflator {
-    tinfl_decompressor: *c_void,
-    in_buf: ~[u8],
-    out_buf: ~[u8],
-    in_offset: uint,                // beginning of the pending input data for decompression
-    in_buf_total: uint,             // end of the pending input data for decompression
-    out_begin: uint,                // beginning of cached output
-    out_offset: uint,               // end of the cached output, beginning of available space for decompression.
-    decomp_done: bool,
+    priv tinfl_decompressor: *c_void,
+    priv in_buf: ~[u8],
+    priv out_buf: ~[u8],
+    priv in_offset: uint,                // beginning of the pending input data for decompression
+    priv in_buf_total: uint,             // end of the pending input data for decompression
+    priv out_begin: uint,                // beginning of cached output
+    priv out_offset: uint,               // end of the cached output, beginning of available space for decompression.
+    priv decomp_done: bool,
     read_total: uint,
     write_total: uint,
 }

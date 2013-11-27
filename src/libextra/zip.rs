@@ -33,16 +33,19 @@ use std::str;
 use std::num;
 use std::vec;
 use std::iter::{Iterator};
-use std::rt::io::{Reader, Writer, Decorator};
-use std::rt::io::{io_error, IoError};
+use std::rt::io::{Reader, Writer};
+use std::rt::io::{io_error, IoError, OtherIoError};
 use std::rt::io::{SeekSet, SeekEnd};
 use std::rt::io::fs::File;
 
+use super::deflate;
+use super::deflate::Deflator;
+use super::deflate::Inflator;
 
 
 static CD_METADATA_MAGIC: u32   = 0x06054B50u32;
 static CD_HEADER_MAGIC: u32     = 0x02014B50u32;
-static LOCAL_HEADEr_MAGIC: u32  = 0x04034B50u32;
+static LOCAL_HEADER_MAGIC: u32  = 0x04034B50u32;
 static LOCAL_DESC_MAGIC: u32    = 0x08074B50u32;
 
 // #define VERSION_MADE            0xB17       // 0xB00 is win32 os-code. 0x17 is 23 in decimal: zip 2.3
@@ -53,15 +56,16 @@ static LOCAL_DESC_MAGIC: u32    = 0x08074B50u32;
 // #define BINARY  0
 // #define ASCII   1
 
-// #define BEST -1                 // Use best method (deflation or store)
-// #define STORE 0                 // Store method
-// #define DEFLATE 8               // Deflation method
-
-static CD_METADATA_SIZE: uint       = 22u;      // including 2 bytes comment size.
+static CD_METADATA_SIZE: uint       = 22u;      // including 2 bytes of comment size.
 static MAX_COMMENT_SIZE: uint       = 0xFFFFu;
 static MAX_CD_METADATA_SEARCH: uint = CD_METADATA_SIZE + MAX_COMMENT_SIZE;
 static CD_FILE_HEADER_SIZE: uint    = 46u;      // leading size for central directory header, before variable size fields.
 static LOCAL_FILE_HEADER_SIZE: uint = 30u;      // leading size for local header, before variable size fields.
+static DATA_DESCRIPTOR_SIZE: uint   = 12u;      
+
+
+static METHOD_STORE: u16 = 0;       // Store method
+static METHOD_DEFLATE: u16 = 8;     // Deflation method
 
 
 
@@ -127,12 +131,16 @@ impl ZipFile {
     }
 
     fn zip_entry_reader<'a>(&'a mut self, entry: &ZipEntry32) -> ZipReader<'a> {
-        self.inner_file.seek(entry.local_header_offset as i64, SeekSet);
-        ZipReader {
+        let mut reader = ZipReader {
             zip_file:   self,
             zip_entry:  entry.clone(),
+            read_total: 0u64,
+            cmp_crc32:  0u32,
             is_eof:     false,
-        }
+            inflator:   None,
+        };
+        reader.init();
+        reader
     }
 
 }
@@ -192,11 +200,10 @@ impl CDMetaData {
         let mut buf = vec::from_elem(max_search_size, 0u8);
         let read_len = read_buf_upto(file, buf, 0, max_search_size);
 
-        for i in range(0, read_len - 4) {
-            // The central directory metadata signature is 0x06054b50
-            if buf[i] == 0x50u8 && buf[i+1] == 0x4bu8 && buf[i+2] == 0x05u8 && buf[i+3] == 0x06u8 {
-                let mut offset = i;
+        for mut offset in range(0, read_len - 4) {
 
+            if unpack_u32_le(buf, offset) == CD_METADATA_MAGIC {
+                // Got to the beginning of the central directory metadata section.
                 offset += 4;
                 self.disk_number = unpack_u16_le(buf, offset);
                 offset += 2;
@@ -222,6 +229,111 @@ impl CDMetaData {
             }
         }
         Err(~"Zip file central directory signature missing.")
+    }
+
+}
+
+/// The local file header of a file item in a zip file
+#[deriving(Clone)]
+pub struct LocalFileHeader {
+    /// version needed to extract
+    version_needed:             u16,
+    ///general purpose bit flag
+    general_flag:               u16,
+    /// compression method
+    compression_method:         u16,
+    /// last mod file time
+    modified_time:              u16,
+    /// last mod file date
+    modified_date:              u16,
+    /// crc-32
+    crc32:                      u32,
+    /// compressed size
+    compressed_size:            u32,
+    /// uncompressed size
+    uncompressed_size:          u32,
+    /// file name length
+    file_name_length:           u16,
+    /// extra field length
+    extra_field_length:         u16,
+    /// file name
+    file_name:                  Option<~[u8]>,
+    /// extra field
+    extra_field:                Option<~[u8]>,
+}
+
+impl LocalFileHeader {
+
+    fn new() -> LocalFileHeader {
+        LocalFileHeader {
+            version_needed:             0u16,
+            general_flag:               0u16,
+            compression_method:         0u16,
+            modified_time:              0u16,
+            modified_date:              0u16,
+            crc32:                      0u32,
+            compressed_size:            0u32,
+            uncompressed_size:          0u32,
+            file_name_length:           0u16,
+            extra_field_length:         0u16,
+            file_name:                  None,
+            extra_field:                None,
+        }
+    }
+
+    fn unpack_header(&mut self, buf: &[u8], mut offset: uint) -> uint {
+
+        if unpack_u32_le(buf, offset) != LOCAL_HEADER_MAGIC {
+            io_error::cond.raise(IoError { kind: OtherIoError, desc: "Zip local file header signature mismatched", detail: None });
+        }
+        offset += 4;
+
+        self.version_needed = unpack_u16_le(buf, offset);           offset += 2;
+        self.general_flag = unpack_u16_le(buf, offset);             offset += 2;
+        self.compression_method = unpack_u16_le(buf, offset);       offset += 2;
+        self.modified_time = unpack_u16_le(buf, offset);            offset += 2;
+        self.modified_date = unpack_u16_le(buf, offset);            offset += 2;
+        self.crc32 = unpack_u32_le(buf, offset);                    offset += 4;
+        self.compressed_size = unpack_u32_le(buf, offset);          offset += 4;
+        self.uncompressed_size = unpack_u32_le(buf, offset);        offset += 4;
+        self.file_name_length = unpack_u16_le(buf, offset);         offset += 2;
+        self.extra_field_length = unpack_u16_le(buf, offset);       offset += 2;
+
+        return offset;
+    }
+
+    // Unpack the variable length header of the zip entry.
+    fn unpack_header_rest(&mut self, buf: &[u8], mut offset: uint) -> uint {
+        if self.file_name_length > 0 {
+            self.file_name = Some(buf.slice(offset, offset + self.file_name_length as uint).to_owned());
+            offset += self.file_name_length as uint;
+        }
+        if self.extra_field_length > 0 {
+            self.extra_field = Some(buf.slice(offset, offset + self.extra_field_length as uint).to_owned());
+            offset += self.extra_field_length as uint;
+        }
+        offset
+    }
+
+    fn get_rest_length(&self) -> uint {
+        return self.file_name_length as uint + self.extra_field_length as uint;
+    }
+
+    fn get_total_length(&self) -> uint {
+        return LOCAL_FILE_HEADER_SIZE + self.get_rest_length();
+    }
+
+    fn read_header(&mut self, file: &mut File) {
+        let mut buf = [0u8, ..LOCAL_FILE_HEADER_SIZE];
+        let read_len = read_buf_upto(file, buf, 0, LOCAL_FILE_HEADER_SIZE);
+        if read_len < LOCAL_FILE_HEADER_SIZE {
+            io_error::cond.raise(IoError { kind: OtherIoError, desc: "Zip local file header does not have enough data", detail: None });
+        }
+
+        let mut header = LocalFileHeader::new();
+        header.unpack_header(buf, 0);
+        let buf = read_upto(file, header.get_rest_length());
+        header.unpack_header_rest(buf, 0);
     }
 
 }
@@ -263,11 +375,14 @@ pub struct ZipEntry32 {
     /// relative offset of local header
     local_header_offset:        u32,
     /// file name
-    file_name:                  Option<~str>,
+    file_name:                  Option<~[u8]>,
     /// extra field
-    extra_field:                Option<~str>,
+    extra_field:                Option<~[u8]>,
     /// file comment
     file_comment:               Option<~str>,
+
+    /// local file header
+    local_header:               LocalFileHeader,
 }
 
 impl ZipEntry32 {
@@ -293,6 +408,7 @@ impl ZipEntry32 {
             file_name:                  None,
             extra_field:                None,
             file_comment:               None,
+            local_header:               LocalFileHeader::new(),
         }
     }
 
@@ -304,38 +420,22 @@ impl ZipEntry32 {
         }
         offset += 4;
 
-        self.version_made_by = unpack_u16_le(buf, offset);
-        offset += 2;
-        self.version_needed = unpack_u16_le(buf, offset);
-        offset += 2;
-        self.general_flag = unpack_u16_le(buf, offset);
-        offset += 2;
-        self.compression_method = unpack_u16_le(buf, offset);
-        offset += 2;
-        self.modified_time = unpack_u16_le(buf, offset);
-        offset += 2;
-        self.modified_date = unpack_u16_le(buf, offset);
-        offset += 2;
-        self.crc32 = unpack_u32_le(buf, offset);
-        offset += 4;
-        self.compressed_size = unpack_u32_le(buf, offset);
-        offset += 4;
-        self.uncompressed_size = unpack_u32_le(buf, offset);
-        offset += 4;
-        self.file_name_length = unpack_u16_le(buf, offset);
-        offset += 2;
-        self.extra_field_length = unpack_u16_le(buf, offset);
-        offset += 2;
-        self.file_comment_length = unpack_u16_le(buf, offset);
-        offset += 2;
-        self.disk_number_start = unpack_u16_le(buf, offset);
-        offset += 2;
-        self.internal_file_attributes = unpack_u16_le(buf, offset);
-        offset += 2;
-        self.external_file_attributes = unpack_u32_le(buf, offset);
-        offset += 4;
-        self.local_header_offset = unpack_u32_le(buf, offset);
-        offset += 4;
+        self.version_made_by = unpack_u16_le(buf, offset);          offset += 2;
+        self.version_needed = unpack_u16_le(buf, offset);           offset += 2;
+        self.general_flag = unpack_u16_le(buf, offset);             offset += 2;
+        self.compression_method = unpack_u16_le(buf, offset);       offset += 2;
+        self.modified_time = unpack_u16_le(buf, offset);            offset += 2;
+        self.modified_date = unpack_u16_le(buf, offset);            offset += 2;
+        self.crc32 = unpack_u32_le(buf, offset);                    offset += 4;
+        self.compressed_size = unpack_u32_le(buf, offset);          offset += 4;
+        self.uncompressed_size = unpack_u32_le(buf, offset);        offset += 4;
+        self.file_name_length = unpack_u16_le(buf, offset);         offset += 2;
+        self.extra_field_length = unpack_u16_le(buf, offset);       offset += 2;
+        self.file_comment_length = unpack_u16_le(buf, offset);      offset += 2;
+        self.disk_number_start = unpack_u16_le(buf, offset);        offset += 2;
+        self.internal_file_attributes = unpack_u16_le(buf, offset); offset += 2;
+        self.external_file_attributes = unpack_u32_le(buf, offset); offset += 4;
+        self.local_header_offset = unpack_u32_le(buf, offset);      offset += 4;
 
         return Ok(offset);
     }
@@ -347,11 +447,11 @@ impl ZipEntry32 {
     // Unpack the variable length header of the zip entry.
     fn unpack_zip_entry_extra(&mut self, buf: &[u8], mut offset: uint) -> uint {
         if self.file_name_length > 0 {
-            self.file_name = Some(str::from_utf8( buf.slice(offset, offset + self.file_name_length as uint) ));
+            self.file_name = Some(buf.slice(offset, offset + self.file_name_length as uint).to_owned());
             offset += self.file_name_length as uint;
         }
         if self.extra_field_length > 0 {
-            self.extra_field = Some(str::from_utf8( buf.slice(offset, offset + self.extra_field_length as uint) ));
+            self.extra_field = Some(buf.slice(offset, offset + self.extra_field_length as uint).to_owned());
             offset += self.extra_field_length as uint;
         }
         if self.file_comment_length > 0 {
@@ -359,6 +459,10 @@ impl ZipEntry32 {
             offset += self.file_comment_length as uint;
         }
         offset
+    }
+
+    fn unpack_data_descriptor(&mut self, buf: &[u8]) {
+        // TODO
     }
 
     fn read_zip_entry(file: &mut File) -> Result<ZipEntry32, ~str> {
@@ -377,6 +481,37 @@ impl ZipEntry32 {
             }
         }
         Ok(entry)
+    }
+
+    fn read_local_file_header(&mut self, file: &mut File) {
+        file.seek(self.local_header_offset as i64, SeekSet);
+        self.local_header.read_header(file)
+    }
+
+    fn get_file_data_offset(&self) -> i64 {
+        self.local_header_offset as i64 + self.local_header.get_total_length() as i64
+    }
+
+    fn read_file_data(&mut self, file: &mut File, read_offset: u64, output_buf: &mut [u8]) -> uint {
+        let remaining_len = self.compressed_size as u64 - read_offset;
+        if remaining_len == 0 {
+            return 0;
+        }
+        file.seek(self.get_file_data_offset() + read_offset as i64, SeekSet);
+        let bytes_to_read = num::min(remaining_len, output_buf.len() as u64) as uint;
+        match file.read(output_buf.mut_slice(0, bytes_to_read)) {
+            Some(read_len)  => read_len,
+            None            => 0
+        }
+    }
+
+    fn has_data_descriptor(&self) -> bool {
+        // TODO
+        true
+    }
+
+    fn checkCrc(&self) {
+        // TODO
     }
 
 }
@@ -423,16 +558,115 @@ impl<'self> Iterator<ZipEntry32> for ZipEntry32Iterator<'self> {
 
 /// Reader for reading the content of the file item at the zip entry.
 pub struct ZipReader<'self> {
-    priv zip_file:  &'self mut ZipFile,
-    priv zip_entry: ZipEntry32,
-    priv is_eof:    bool,
+    priv zip_file:      &'self mut ZipFile,
+    priv zip_entry:     ZipEntry32,
+    priv read_total:    u64,
+    priv cmp_crc32:     u32,
+    priv is_eof:        bool,
+    priv inflator:      Option<Inflator>,
+}
+
+impl<'self> ZipReader<'self> {
+
+    fn init(&mut self) {
+        self.zip_entry.read_local_file_header(&mut self.zip_file.inner_file);
+        match self.zip_entry.compression_method {
+            METHOD_STORE => (),
+            METHOD_DEFLATE => {
+                self.inflator = Some(Inflator::with_size_factor(deflate::DEFAULT_SIZE_FACTOR));
+            },
+            _ => {
+                io_error::cond.raise(IoError {
+                        kind: OtherIoError,
+                        desc: "Unsupported compression method",
+                        detail: Some(format!("Unsupported compression method: {:u}", self.zip_entry.compression_method as uint))
+                    });
+            }
+        }
+    }
+
+    fn store_read(&mut self, output_buf: &mut [u8]) -> Option<uint> {
+        if self.is_eof {
+            return None;
+        }
+        let read_len = self.zip_entry.read_file_data(&mut self.zip_file.inner_file, self.read_total, output_buf);
+        self.read_total += read_len as u64;
+        if read_len > 0 {
+            Some(read_len)
+        } else {
+            self.is_eof = true;
+            None
+        }
+    }
+
+    fn deflate_read(&mut self, output_buf: &mut [u8]) -> Option<uint> {
+        let mut end_buf = [0u8, ..DATA_DESCRIPTOR_SIZE];
+        let mut end_len;
+        let mut inflator = self.inflator.get_mut_ref();
+        let status = inflator.decompress_read(
+            // Callback to read input data.
+            |in_buf| {
+                if self.is_eof {
+                    0
+                } else {
+                    let read_len = self.zip_entry.read_file_data(&mut self.zip_file.inner_file, self.read_total, in_buf);
+                    self.read_total += read_len as u64;
+                    read_len    // Return number of bytes read, including 0 for EOF
+                }
+            },
+            output_buf);
+
+        match status {
+            Ok(0) => {
+                self.is_eof = true;
+
+                if self.zip_entry.has_data_descriptor() {
+                    // Move the rest of the bytes into end_buf, and read more into end_buf if not enough bytes for it.
+                    end_len = inflator.get_rest(end_buf);
+                    if end_len < DATA_DESCRIPTOR_SIZE {
+                        end_len += read_buf_upto(&mut self.zip_file.inner_file, end_buf, end_len, DATA_DESCRIPTOR_SIZE - end_len);
+                    }
+                    self.zip_entry.unpack_data_descriptor(end_buf);
+                    self.zip_entry.checkCrc();
+                }
+                None
+            },
+            Ok(output_len) => {
+                self.cmp_crc32 = update_crc(self.cmp_crc32, output_buf, 0, output_len);
+                return Some(output_len);
+            },
+            _ => {
+                // Clean up states before raising error.
+                self.is_eof = true;
+                io_error::cond.raise(IoError {
+                        kind: OtherIoError,
+                        desc: "Read failure in decompression",
+                        detail: Some(format!("Read failure in deflate_read().  status: {:?}", status))
+                    });
+                None
+            }
+        }
+    }
+
+
 }
 
 impl<'self> Reader for ZipReader<'self> {
+
     /// Read the decompressed data from the file item inside the zip file.
     fn read(&mut self, output_buf: &mut [u8]) -> Option<uint> {
-
-        Some(0)
+        match self.zip_entry.compression_method {
+            METHOD_STORE    => self.store_read(output_buf),
+            METHOD_DEFLATE  => self.deflate_read(output_buf),
+            _               => {
+                io_error::cond.raise(IoError {
+                        kind: OtherIoError,
+                        desc: "Unsupported compression method",
+                        detail: Some(format!("Unsupported compression method: {:u}", self.zip_entry.compression_method as uint))
+                    });
+                None
+            }
+        }
     }
 
     fn eof(&mut self) -> bool {
@@ -514,6 +748,12 @@ fn read_buf_upto<R: Reader>(reader: &mut R, buf: &mut [u8], offset: uint, len_to
         }
     }
     return total_read;
+}
+
+fn update_crc(mut crc: u32, buf: &[u8], from: uint, to: uint) -> u32 {
+    crc = crc ^ 0xFFFFFFFF;     // Pre one's complement;
+    // TODO
+    return crc ^ 0xFFFFFFFF;    // Post one's complement
 }
 
 
