@@ -19,13 +19,13 @@ extern mod extra;
 // Uncomment either one of the following sections to link to one or the other library.
 
 // Uncomment these to use the local modules in the local rustyzip.lib.
-extern mod rustyzip;
-use rustyzip::gzip;
-use rustyzip::gzip::{GZip, GZipReader, GZipWriter};
+// extern mod rustyzip;
+// use rustyzip::gzip;
+// use rustyzip::gzip::{GZip, GZipReader, GZipWriter};
 
 // Uncomment these to use the modules in the system's libextra.
-// use extra::gzip;
-// use extra::gzip::{GZip, GZipReader, GZipWriter};
+use extra::gzip;
+use extra::gzip::{GZip, GZipReader, GZipWriter};
 
 
 
@@ -35,11 +35,11 @@ use std::vec;
 use std::result::{Result, Ok, Err};
 use std::to_str::ToStr;
 use std::path::Path;
-use std::rt::io;
-use std::rt::io::{Reader, Writer, Open, Read, Truncate, Write, io_error};
-use std::rt::io::fs;
-use std::rt::io::fs::File;
-use std::rt::io::{IoError, OtherIoError};
+use std::io;
+use std::io::{Reader, Writer, Open, Read, Truncate, Write, io_error};
+use std::io::fs;
+use std::io::fs::File;
+use std::io::{IoError, OtherIoError};
 use extra::getopts::{optflag, optopt, getopts};
 
 
@@ -210,7 +210,7 @@ fn open_compressed_writer(options: &Options, file: &str) -> Result<File, ~str> {
     if options.stdout {
         //let writer = stdio::stdout();
         //return writer;
-        fail!("std::rt::io::stdout is not implemented yet");
+        fail!("std::io::stdout is not implemented yet");
     }
 
     let gz_filepath = file + ".gz";
@@ -263,9 +263,9 @@ fn compress_file(options: &Options, file: &str) -> ~[~str] {
         return results;
     }
 
-    do io_error::cond.trap(|c| {
+    io_error::cond.trap(|c| {
         results.push(c.to_str());
-    }).inside {
+    }).inside(|| {
         match File::open_mode(&filepath, Open, Read) {
             Some(stream_reader) => {
                 match open_compressed_writer(options, file) {
@@ -283,7 +283,7 @@ fn compress_file(options: &Options, file: &str) -> ~[~str] {
             None => 
                 results.push(format!("Failed to open file {:s}", filepath.as_str().unwrap_or("")))
         }
-    }
+    });
 
     results
 }
@@ -293,7 +293,7 @@ fn open_decompressed_writer(options: &Options, filepath: &Path) -> File {
     if options.stdout {
         //let writer = stdio::stdout();
         //return writer;
-        fail!("std::rt::io::stdout is not implemented yet");
+        fail!("std::io::stdout is not implemented yet");
     }
 
     let filestem = match filepath.filestem_str() {
@@ -366,9 +366,9 @@ fn decompress_file(options: &Options, file: &str) -> ~[~str] {
         return results;
     }
 
-    do io_error::cond.trap(|c| {
+    io_error::cond.trap(|c| {
         results.push(c.to_str());
-    }).inside {
+    }).inside (|| {
         match File::open_mode(&filepath, Open, Read) {
             Some(stream_reader) => {
                 if options.use_stream {
@@ -380,7 +380,7 @@ fn decompress_file(options: &Options, file: &str) -> ~[~str] {
             None => 
                 results.push(format!("Failed to open file {:s}", filepath.as_str().unwrap_or("")))
         }
-    }
+    });
     results
 }
 
@@ -411,9 +411,9 @@ fn list_file(file: &str) -> ~[~str] {
         return results;
     }
 
-    do io_error::cond.trap(|c| {
+    io_error::cond.trap(|c| {
         results.push(c.to_str());
-    }).inside {
+    }).inside(|| {
         match File::open_mode(&filepath, Open, Read) {
             Some(stream_reader) => {
                 let mut stream_reader = stream_reader;
@@ -427,7 +427,7 @@ fn list_file(file: &str) -> ~[~str] {
             None => 
                 results.push(format!("Failed to open file {:s}", filepath.as_str().unwrap_or("")))
         }
-    }
+    });
 
     results
 }

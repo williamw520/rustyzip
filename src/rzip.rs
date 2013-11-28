@@ -31,15 +31,11 @@ use rustyzip::zip::{ZipFile};
 
 use std::os;
 use std::num;
-//use std::vec;
 use std::result::{Result, Ok, Err};
 use std::to_str::ToStr;
 use std::path::Path;
-//use std::rt::io;
-//use std::rt::io::{Reader, Writer, Open, Read, Truncate, Write, io_error};
-use std::rt::io::{Open, Read, io_error};
-//use std::rt::io::fs;
-use std::rt::io::fs::File;
+use std::io::{Open, Read, io_error};
+use std::io::fs::File;
 use extra::getopts::{optflag, optopt, getopts};
 
 
@@ -209,9 +205,9 @@ fn list_file(file: &str) -> ~[~str] {
         return results;
     }
 
-    do io_error::cond.trap(|c| {
+    io_error::cond.trap(|c| {
         results.push(c.to_str());
-    }).inside {
+    }).inside(|| {
         match File::open_mode(&filepath, Open, Read) {
             Some(stream_reader) => {
                 match ZipFile::open(stream_reader) {
@@ -230,7 +226,7 @@ fn list_file(file: &str) -> ~[~str] {
             None => 
                 results.push(format!("Failed to open file {:s}", filepath.as_str().unwrap_or("")))
         }
-    }
+    });
 
     results
 }

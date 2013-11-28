@@ -33,10 +33,10 @@ use std::str;
 use std::num;
 use std::vec;
 use std::iter::{Iterator};
-use std::rt::io::{Reader, Writer};
-use std::rt::io::{io_error, IoError, OtherIoError};
-use std::rt::io::{SeekSet, SeekEnd};
-use std::rt::io::fs::File;
+use std::io::{Reader, Writer};
+use std::io::{io_error, IoError, OtherIoError};
+use std::io::{SeekSet, SeekEnd};
+use std::io::fs::File;
 
 use super::deflate;
 use super::deflate::Deflator;
@@ -759,10 +759,6 @@ fn update_crc(mut crc: u32, buf: &[u8], from: uint, to: uint) -> u32 {
 
 #[cfg(test)]
 mod tests {
-
-    use std::rt::io::Reader;
-    use std::rt::io::mem::MemReader;
-    use std::rt::io::mem::MemWriter;
 
 
 }
